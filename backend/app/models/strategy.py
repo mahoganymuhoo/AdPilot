@@ -41,6 +41,7 @@ class StrategyCheckpoint(Base):
     checked_at = Column(DateTime, default=datetime.utcnow)
     current_metrics = Column(JSON, nullable=False)
     ai_analysis = Column(JSON, nullable=False)
+    seller_note = Column(String(500), nullable=True)
 
     progress_pct = Column(Float)
     status = Column(String(20))  # on_track | at_risk | off_track

@@ -2,8 +2,10 @@
 import { useState } from "react";
 import { Target, CheckCircle, Clock, AlertTriangle, XCircle, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import clsx from "clsx";
+import { useStrategies, useStrategy } from "@/lib/hooks";
+import { PageLoader, PageError, EmptyState } from "@/components/ui/PageStates";
 
-// ---- Demo veri ----
+// ---- Demo veri (backend bağlanana kadar fallback) ----
 const DEMO_STRATEGIES = [
   {
     id: 1,
@@ -114,9 +116,18 @@ const opTypeLabels: Record<string, string> = {
 
 export default function StrategiesPage() {
   const [selected, setSelected] = useState<number>(1);
-  const strategy = DEMO_STRATEGIES.find((s) => s.id === selected)!;
-  const statusCfg = statusConfig[strategy.status as keyof typeof statusConfig];
+  const { data: apiData, error: apiError, isLoading } = useStrategies();
+
+  // API'den veri geldiyse kullan, gelmediyse demo
+  const strategies = (apiData?.strategies && apiData.strategies.length > 0)
+    ? apiData.strategies
+    : DEMO_STRATEGIES;
+
+  const strategy = strategies.find((s: any) => s.id === selected) ?? strategies[0];
+  const statusCfg = statusConfig[(strategy?.status as keyof typeof statusConfig) ?? "active"];
   const StatusIcon = statusCfg.icon;
+
+  if (isLoading) return <PageLoader label="Stratejiler yükleniyor..." />;
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -125,12 +136,15 @@ export default function StrategiesPage() {
         <p className="text-sm text-gray-500 mt-1">
           AI önerisi → Aksiyon → Takip → Sonuç. Her strateji DB'ye kaydedilir, sonraki kararlara beslenir.
         </p>
+        {apiError && (
+          <p className="text-xs text-amber-600 mt-1">⚠ Backend bağlantısı yok — demo veri gösteriliyor</p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Sol: Strateji Listesi */}
         <div className="lg:col-span-1 space-y-3">
-          {DEMO_STRATEGIES.map((s) => {
+          {strategies.map((s: any) => {
             const cfg = statusConfig[s.status as keyof typeof statusConfig];
             const SIcon = cfg.icon;
             const totalDays = s.days_elapsed + s.days_remaining;

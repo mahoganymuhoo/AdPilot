@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
-import { Zap, TrendingUp, DollarSign, BarChart2, Eye } from "lucide-react";
+import { Zap, TrendingUp, DollarSign, BarChart2, Eye, Rocket } from "lucide-react";
 import clsx from "clsx";
 import InfoModal from "@/components/ui/InfoModal";
 import { EXPLAINERS } from "@/lib/explainers";
+import LaunchStrategyModal from "@/components/strategy/LaunchStrategyModal";
 
 const DEMO_PRODUCTS = [
   {
@@ -100,6 +101,7 @@ const scoreFactors = [
 
 export default function InsightsPage() {
   const [selected, setSelected] = useState<number>(1);
+  const [launchModal, setLaunchModal] = useState(false);
   const selectedProduct = DEMO_PRODUCTS.find((p) => p.id === selected)!;
   const config = scoreConfig[selectedProduct.recommendation as keyof typeof scoreConfig];
 
@@ -253,8 +255,50 @@ export default function InsightsPage() {
               </div>
             )}
           </div>
+
+          {/* Strateji Başlat CTA */}
+          <div className={clsx(
+            "rounded-xl border p-5 shadow-sm",
+            selectedProduct.recommendation === "dont_advertise"
+              ? "bg-gray-50 border-gray-200"
+              : "bg-green-50 border-green-200"
+          )}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-900 mb-1">
+                  {selectedProduct.recommendation === "dont_advertise"
+                    ? "Bu öneriyi uyguladın mı?"
+                    : "Bu öneriyi uyguladın mı? 🎯"}
+                </p>
+                <p className="text-xs text-gray-500 leading-relaxed max-w-sm">
+                  {selectedProduct.recommendation === "dont_advertise"
+                    ? "Listing düzeltmesi yaptıysan veya başka bir aksiyon aldıysan AI bunu takibe alabilir."
+                    : "AI hedef belirleyip süreci takip eder. Sonunda ne öğrenildiğini hafızaya kaydeder."}
+                </p>
+              </div>
+              <button
+                onClick={() => setLaunchModal(true)}
+                className={clsx(
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold shrink-0 ml-4 transition-colors",
+                  selectedProduct.recommendation === "dont_advertise"
+                    ? "bg-gray-700 hover:bg-gray-600 text-white"
+                    : "bg-green-600 hover:bg-green-700 text-white"
+                )}
+              >
+                <Rocket size={15} />
+                Strateji Başlat
+              </button>
+            </div>
+          </div>
         </div>
       </div>
+
+      {launchModal && (
+        <LaunchStrategyModal
+          product={selectedProduct}
+          onClose={() => setLaunchModal(false)}
+        />
+      )}
     </div>
   );
 }

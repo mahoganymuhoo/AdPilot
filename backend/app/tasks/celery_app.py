@@ -6,7 +6,7 @@ celery_app = Celery(
     "adpilot",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.sync_tasks"],
+    include=["app.tasks.sync_tasks", "app.tasks.strategy_monitor"],
 )
 
 celery_app.conf.update(
@@ -27,6 +27,10 @@ celery_app.conf.update(
         "run-anomaly-detection-hourly": {
             "task": "app.tasks.sync_tasks.run_anomaly_detection",
             "schedule": crontab(minute=0),  # Her saat başı
+        },
+        "check-active-strategies-hourly": {
+            "task": "app.tasks.strategy_monitor.check_active_strategies",
+            "schedule": crontab(minute=30),  # Her saat 30'unda (anomali ile çakışmasın)
         },
     },
 )
