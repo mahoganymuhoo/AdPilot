@@ -1,7 +1,7 @@
 # AdPilot — Geliştirme Yol Haritası
 
 > Son güncelleme: 2026-05-22  
-> Mevcut sürüm: v0.1.0  
+> Mevcut sürüm: v0.2.0  
 > Branch: master
 
 ---
@@ -33,124 +33,56 @@
 
 ---
 
-## Faz 1 — Kritik Düzeltmeler ve Bağlantılar (1-2 gün)
-
-> Mevcut özellikler teoride var ama pratikte kopuk. Bu faz bağlantıları kurar.
+## ~~Faz 1 — Kritik Düzeltmeler ve Bağlantılar~~ ✅ TAMAMLANDI (P0)
 
 ### 1.1 Strateji Sistemini Kapatma
 
-- [ ] **"Bu öneriyi uyguladım" butonu** — Insights sayfasındaki her ürün kartına ekle.
-  - Tıklanınca `LaunchStrategyModal` açılır.
-  - Modal: "Ne yaptın?" text alanı (action_confirmed), AI provider seçimi.
-  - `POST /api/v1/strategies/launch` çağrısı → redirect `/strategies/{id}`.
-  - Dosya: `frontend/app/insights/page.tsx`, yeni `frontend/components/strategy/LaunchStrategyModal.tsx`
-
-- [ ] **`context_for_next_ai` zincirini frontend'e bağla** — Yeni strateji başlatılırken aynı ürünün tamamlanmış son stratejisini çek.
-  - `GET /api/v1/strategies/{id}/context` → `seller_context` içine ekle.
-  - UI'da "Önceki Strateji Hafızası" collapsed kutucuğu göster.
-  - Dosya: `frontend/components/strategy/LaunchStrategyModal.tsx`
-
-- [ ] **Checkpoint'e satıcı notu alanı** — `StrategyCheckpoint` modeline `seller_note: str | None` ekle.
-  - API: `CheckpointRequest.seller_note` → prompt'a `<seller_note>` tag'i olarak ekle.
-  - UI: checkpoint kartında not alanı göster.
-  - Dosya: `backend/app/models/strategy.py`, `backend/app/api/v1/strategies.py`, `frontend/app/strategies/page.tsx`
-
-- [ ] **Celery otomatik checkpoint görevi** — Her saat `active` stratejileri tara.
-  - `check_interval_days` geçmişse ve son checkpoint yoksa → metrik çek → `monitor_strategy` çağır → kaydet.
-  - Dosya: `backend/app/tasks/strategy_monitor.py`, `backend/app/tasks/celery_app.py`
-
-- [ ] **Strateji Şablonları** — Yeni strateji başlatırken hazır şablon seç.
-  - Şablonlar: "Bütçe Artışı (%20)", "Küçük Bütçe Testi", "Listing + Reklam Kombine", "Sezon Testi", "Durdur ve İzle"
-  - Her şablon: varsayılan `timeline_days`, `check_interval_days`, `success_criteria` önerileri içerir.
-  - Dosya: `frontend/lib/strategy_templates.ts`, `frontend/components/strategy/StrategyTemplateSelector.tsx`
+- [x] **"Bu öneriyi uyguladım" butonu** — `LaunchStrategyModal` insights sayfasına eklendi
+- [x] **`context_for_next_ai` zinciri** — `GET /strategies/{id}/context` endpoint + modal zinciri
+- [x] **Checkpoint'e satıcı notu alanı** — `seller_note` modelde + API'de + UI'da
+- [x] **Celery otomatik checkpoint görevi** — `strategy_monitor.py`, saatlik beat
+- [x] **Strateji Şablonları** — 4 şablon: increase/test/optimize/reduce_budget
 
 ### 1.2 Frontend Kopuk Bağlantılar
 
-- [ ] **SWR ile gerçek API bağlantısı** — Tüm sayfalardaki demo veriler kaldırılıp `useSWR` hook'larına bağlanacak.
-  - Dashboard: `GET /api/v1/metrics/dashboard?seller_id=1`
-  - Products: `GET /api/v1/metrics/products?seller_id=1`
-  - Insights: `GET /api/v1/insights/products?seller_id=1`
-  - Strategies: `GET /api/v1/strategies?seller_id=1`
-  - Dosya: `frontend/lib/api.ts` (merkezi fetch helper), her sayfa
-
-- [ ] **Loading ve error state** — Her sayfaya skeleton loader ve hata mesajı ekle.
-  - Dosya: `frontend/components/ui/SkeletonCard.tsx`, `frontend/components/ui/ErrorBanner.tsx`
-
-- [ ] **Boş state yönetimi** — Veri yokken anlamlı mesaj ve aksiyon göster.
-  - "Henüz veri yok → Veri Yükle" CTA butonu
-  - Dosya: `frontend/components/ui/EmptyState.tsx`
+- [x] **SWR ile gerçek API bağlantısı** — `frontend/lib/api.ts` + `frontend/lib/hooks.ts`
+- [x] **Loading ve error state** — `PageLoader`, `PageError`, `SkeletonCard` bileşenleri
+- [x] **Boş state yönetimi** — `EmptyState` bileşeni
 
 ---
 
-## Faz 2 — Yeni Algoritmalar (1 hafta)
+## ~~Faz 2 — Yeni Algoritmalar~~ ✅ TAMAMLANDI (P1 + P2)
 
-### 2.1 Budget Saturation Curve (Öncelik: YÜKSEK)
+### ✅ Budget Saturation Curve
+- [x] `calculate_saturation_curve()` — logaritmik fit, optimal_budget, diminishing_returns_point
+- [x] `GET /api/v1/insights/product/{id}/saturation-curve` endpoint
 
-> "Daha fazla bütçe harcasam ROAS'ım ne olur?" sorusunu cevaplar.
+### ✅ Break-even Stress Test
+- [x] `stress_test_breakeven()` — COGS değişim matrisi, safe_up_to_cogs_increase
+- [x] `StressTestPanel.tsx` — slider + anlık break-even hesabı
+- [x] Onboarding adım 2'de canlı break-even önizleme
 
-- [ ] **Backend algoritması** — Geçmiş (bütçe, ROAS) çiftlerine logaritmik fit uygula.
-  ```python
-  # ROAS = a × ln(budget) + b  →  scipy.optimize.curve_fit
-  # Çıktı: optimal_budget, diminishing_returns_point, projected_roas(budget)
-  ```
-  Dosya: `backend/app/services/analytics.py` → `calculate_saturation_curve()`
+### ✅ Listing Kalite Skoru
+- [x] `calculate_listing_quality()` — CTR/benchmark, image, video, title, review skorlaması
+- [x] `GET /api/v1/insights/product/{id}/listing-quality` endpoint
 
-- [ ] **API endpoint** — `GET /api/v1/insights/product/{id}/saturation-curve`
-  - Girdi: ürün ID
-  - Çıktı: eğri noktaları (bütçe → tahmini ROAS), `optimal_budget`, `current_efficiency_pct`
+### ✅ Ürün Yaşam Döngüsü Tespiti
+- [x] `detect_product_lifecycle()` — launch/growth/mature/declining via EMA crossover
+- [x] `GET /api/v1/insights/product/{id}/lifecycle` endpoint
 
-- [ ] **Frontend görselleştirme** — Recharts ile interaktif eğri.
-  - X ekseni: günlük bütçe ($), Y ekseni: tahmini ROAS
-  - Mevcut bütçe dikey çizgi ile işaretlenir, "Verim azalıyor" noktası vurgulanır
-  - Dosya: `frontend/components/charts/SaturationCurveChart.tsx`, `frontend/app/insights/page.tsx`
+### ✅ Strateji Başarı Panosu
+- [x] `GET /api/v1/strategies/stats` — başarı oranı, operasyon tipine göre breakdown
+- [x] AI beslemesi için `ai_context_summary` çıktısı
 
-### 2.2 Break-even Stress Test (Öncelik: YÜKSEK)
+### ✅ Erken Uyarı — Hedef Projeksiyon
+- [x] `project_strategy_outcome()` — lineer regresyon, will_meet_deadline bayrağı
+- [x] `GET /api/v1/strategies/{id}/projection` endpoint
 
-> "Maliyetlerim %15 artarsa bu reklam hala karlı mı?"
+### ✅ Mobil Uyumluluk
+- [x] `Sidebar.tsx` — `lg:` breakpoint, mobil top header + hamburger + anomali badge
+- [x] Mobil overlay menü (slide-in, tıkla kapat)
 
-- [ ] **Backend** — `stress_test_breakeven(product_id, cogs_increase_pct, ad_spend_increase_pct)` fonksiyonu.
-  - Senaryo matrisi: COGS +%10/+%20/+%30, mevcut reklam bütçesiyle hesapla.
-  - Çıktı: her senaryoda `is_profitable`, yeni `break_even_acos`, `net_profit_per_sale`
-  - Dosya: `backend/app/services/analytics.py`
-
-- [ ] **Frontend** — Products sayfasında "Senaryo Analizi" toggle paneli.
-  - Slider: COGS değişimi (-%20 → +%50)
-  - Anlık güncelleme: break-even ACOS çubuğu kayar, karlılık rengi değişir
-  - Dosya: `frontend/app/products/page.tsx`, `frontend/components/ui/StressTestPanel.tsx`
-
-### 2.3 Listing Kalite Skoru (Öncelik: ORTA)
-
-> CTR'ı kategori ortalamasıyla karşılaştırarak listing kalitesini ölç.
-
-- [ ] **Backend** — `calculate_listing_quality_score(product_ctr, category_avg_ctr)` → 0-100 skor.
-  - < 0.7x kategori → "Listing zayıf, reklam öncesi düzelt"
-  - 0.7-1.3x → "Ortalama"
-  - > 1.3x → "Güçlü listing, reklam verimli olacak"
-  - Etsy kategorisi bazında benchmark tablosu (manuel başlangıç, zamanla öğrenen)
-  - Dosya: `backend/app/services/analytics.py`, `backend/app/models/platform.py` (kategori benchmark)
-
-- [ ] **Frontend** — Products sayfasında her ürün kartına listing kalite badge'i ekle.
-  - İkon + kısa açıklama + InfoModal ile detay
-  - Dosya: `frontend/app/products/page.tsx`
-
-### 2.4 Ürün Yaşam Döngüsü Tespiti (Öncelik: ORTA)
-
-> ROAS trendi + mevsimsellik → ürünün nerede olduğunu tespit et.
-
-- [ ] **Backend** — `detect_product_lifecycle(roas_history_90d, seasonal_index)` → `launch|growth|mature|declining`
-  - Launch: < 30 günlük veri
-  - Growth: EMA_7d > EMA_30d ve trend > +%5
-  - Mature: EMA'lar birbirine yakın, stabil
-  - Declining: EMA_7d < EMA_30d ve trend < -%5 ve sezon değil
-  - Dosya: `backend/app/services/analytics.py`
-
-- [ ] **Frontend** — Dashboard ve Products sayfasına lifecycle badge ekle.
-  - Her lifecycle için farklı renk + öneri metni
-  - Dosya: `frontend/app/dashboard/page.tsx`, `frontend/app/products/page.tsx`
-
-### 2.5 Dayparting Analizi (Öncelik: DÜŞÜK)
-
-> Hangi saat/gün reklamın en verimli olduğunu göster.
+### Dayparting Analizi (Öncelik: DÜŞÜK — P3'e taşındı)
 
 - [ ] **Backend** — Saatlik/günlük metrik aggregation.
   - `GROUP BY EXTRACT(hour FROM time), EXTRACT(dow FROM time)`
@@ -162,49 +94,30 @@
 
 ---
 
-## Faz 3 — Kullanıcı Deneyimi İyileştirmeleri (1 hafta)
+## ~~Faz 3 — Kullanıcı Deneyimi İyileştirmeleri~~ ✅ TAMAMLANDI (P1)
 
-### 3.1 Onboarding Wizard (Öncelik: KRİTİK)
+### ✅ Onboarding Wizard
+- [x] 4 adımlı wizard: veri kaynağı → maliyetler → AI provider → tamamlandı
+- [x] Canlı break-even önizleme (adım 2)
+- [x] `OnboardingGuard` → ilk açılışta yönlendir, tamamlandıysa atla
+- [x] Dosya: `frontend/app/onboarding/page.tsx`, `frontend/components/ui/OnboardingGuard.tsx`
 
-> İlk açılışta kullanıcıyı sisteme dahil et.
+### ✅ Anomali Bildirimleri
+- [x] `AnomalyDrawer.tsx` — sağdan açılan panel, şiddet badge'i, genişletilebilir detay
+- [x] Sidebar'da kırmızı badge (okunmamış anomali sayısı)
+- [x] Mobil header'da anomali bell butonu
+- [x] Demo data hazır, `useAnomalies` hook bağlanmaya hazır
 
-- [ ] **Adım 1 — Veri kaynağı seç**: Etsy API / CSV Yükle / Manuel Gir
-- [ ] **Adım 2 — COGS ve hedefler**: Ürün başına maliyet, hedef ROAS, günlük bütçe
-- [ ] **Adım 3 — AI provider seç**: Claude API key / OpenAI API key gir, test et
-- [ ] **Adım 4 — İlk analiz**: Yüklenen veriyle hemen analiz çalıştır, sonucu göster
-- [ ] Onboarding tamamlandıysa tekrar gösterme (localStorage flag)
-- [ ] Dosya: `frontend/app/onboarding/page.tsx`, `frontend/components/onboarding/`
+### ✅ Mobil Uyumluluk
+- [x] Sidebar hamburger + overlay menü (P2'de tamamlandı, buraya da işaret)
 
-### 3.2 Anomali Bildirimleri (Öncelik: YÜKSEK)
-
-> Z-score ateşlendi ama kullanıcı haberdar olmuyor.
-
-- [ ] **Backend** — Celery görevi: saatlik anomali taraması → `anomaly_log` tablosuna yaz.
-  - `is_notified` flag'i ekle, bildirildikten sonra işaretle.
-  - Dosya: `backend/app/tasks/anomaly_scanner.py`
-
-- [ ] **Frontend** — Sidebar'da kırmızı badge (okunmamış anomali sayısı).
-  - Tıklanınca anomali listesi açılır, her biri "Neden oldu? Ne yapmalıyım?" ile
-  - `GET /api/v1/insights/anomalies?unread=true`
-  - Dosya: `frontend/components/ui/Sidebar.tsx`, `frontend/components/ui/AnomalyDrawer.tsx`
-
-### 3.3 Dashboard Tarih Filtresi (Öncelik: ORTA)
+### Dashboard Tarih Filtresi (Öncelik: ORTA — P3'e taşındı)
 
 - [ ] Date range picker — Son 7 / 14 / 30 / 90 gün veya özel aralık
 - [ ] Tüm chart ve KPI kartları seçilen aralığa göre yeniden hesaplansın
 - [ ] Dosya: `frontend/app/dashboard/page.tsx`, `frontend/components/ui/DateRangePicker.tsx`
 
-### 3.4 Mobil Uyumluluk (Öncelik: ORTA)
-
-> Fixed sidebar + ml-64 telefonda kırılıyor.
-
-- [ ] Sidebar: mobilde gizle, hamburger menü ile aç/kapat
-- [ ] Grid layout'lar: `grid-cols-3` → mobilde `grid-cols-1`
-- [ ] KPI kartlar: 2 sütun → mobilde 1 sütun
-- [ ] Chart'lar: responsive container zaten var, boyut ayarı yap
-- [ ] Dosya: `frontend/components/ui/Sidebar.tsx`, `frontend/app/layout.tsx`
-
-### 3.5 CSV Export (Öncelik: DÜŞÜK)
+### CSV Export (Öncelik: DÜŞÜK)
 
 - [ ] Strateji sonuçlarını CSV/PDF export et
 - [ ] Dashboard metriklerini export et
@@ -212,37 +125,11 @@
 
 ---
 
-## Faz 4 — Strateji Sistemini Derinleştirme (2 hafta)
+## Faz 4 — Strateji Sistemini Derinleştirme (Önümüzdeki 2 hafta — P3)
 
-### 4.1 Strateji Başarı Oranı Panosu
+### ~~4.1 Strateji Başarı Oranı Panosu~~ ✅ TAMAMLANDI (P2'de)
 
-> Tamamlanan stratejilerden pattern çıkar, yeni stratejileri besle.
-
-- [ ] **Backend** — `GET /api/v1/strategies/stats?seller_id={id}` endpoint.
-  - Operasyon tipine göre başarı oranı
-  - Ortalama ilerleme süresi
-  - En çok hangi metrik hedefine ulaşılıyor/ulaşılamıyor
-  - Dosya: `backend/app/api/v1/strategies.py`
-
-- [ ] **Frontend** — Strategies sayfasına özet istatistik paneli.
-  - "Bütçe artışı stratejilerinin %68'i başarılı"
-  - "Ortalama hedef süren: 11 gün"
-  - Dosya: `frontend/app/strategies/page.tsx`
-
-- [ ] **AI beslemesi** — `launch_strategy` prompt'una istatistik ekle.
-  - "Bu satıcının geçmiş 3 bütçe artışı stratejisinin %67'si başarılı oldu." → AI daha gerçekçi hedef koyar
-
-### 4.2 Erken Uyarı — Hedef Projeksiyon
-
-> 3. günde "bu hızla 14 günde hedefe ulaşılamaz" öngörüsü.
-
-- [ ] **Backend** — `project_strategy_outcome(checkpoints, target_metrics, days_remaining)`.
-  - Mevcut değişim hızıyla lineer ekstrapolasyon
-  - "Bu hızla gidersen ROAS hedefi {X} güne ulaşır" (süre > kalan gün ise uyar)
-  - Dosya: `backend/app/services/analytics.py`
-
-- [ ] **Frontend** — Checkpoint kartında projeksiyon göster.
-  - "Mevcut hızda: 18. günde hedefe ulaşırsın (hedef: 14 gün) ⚠️"
+### ~~4.2 Erken Uyarı — Hedef Projeksiyon~~ ✅ TAMAMLANDI (P2'de)
 
 ### 4.3 Strateji Karşılaştırma
 
@@ -314,7 +201,7 @@
 
 ## Teknik Borç
 
-- [ ] **Alembic migration** — `strategies`, `strategy_checkpoints`, `strategy_outcomes` tabloları henüz migration'a eklenmedi. `backend/alembic/versions/002_strategy_tables.py` oluştur.
+- [x] **Alembic migration** — `002_strategy_tables.py` oluşturuldu ve çalıştırıldı.
 - [ ] **Pydantic response schema'ları** — API endpoint'lerin çıktıları için `schemas/` altında response model ekle. Şu an `dict` dönüyor.
 - [ ] **Test coverage** — Analytics algoritmaları için birim testler yok. `backend/tests/test_analytics.py` başlat. Bilinen ROAS/ACOS değerleriyle doğrulama yap.
 - [ ] **Rate limiting** — LLM provider çağrılarına retry + exponential backoff ekle. Şu an hata fırlatıyor.
@@ -326,35 +213,36 @@
 ## Öncelik Özeti
 
 ```
-P0 — Bugün / Yarın:
-  → "Bu öneriyi uyguladım" butonu (strateji başlatma kopuk)
+✅ P0 — TAMAMLANDI:
+  → "Bu öneriyi uyguladım" butonu (LaunchStrategyModal)
   → context_for_next_ai zinciri frontend bağlantısı
-  → SWR ile gerçek API bağlantısı (demo veriler kaldırılsın)
-  → Alembic migration (strategy tabloları DB'de yok)
+  → SWR ile gerçek API bağlantısı (api.ts + hooks.ts)
+  → Alembic migration (002_strategy_tables.py)
 
-P1 — Bu Hafta:
-  → Celery otomatik checkpoint görevi
-  → Onboarding wizard
-  → Budget saturation curve
-  → Break-even stress test
-  → Anomali bildirimleri
+✅ P1 — TAMAMLANDI:
+  → Celery otomatik checkpoint görevi (strategy_monitor.py)
+  → Onboarding wizard (4 adım + OnboardingGuard)
+  → Budget saturation curve (logaritmik fit algoritması)
+  → Break-even stress test (StressTestPanel + senaryo matrisi)
+  → Anomali bildirimleri (AnomalyDrawer + sidebar badge)
 
-P2 — Önümüzdeki 2 Hafta:
-  → Listing kalite skoru
-  → Ürün yaşam döngüsü tespiti
-  → Strateji başarı panosu
-  → Erken uyarı / hedef projeksiyon
-  → Mobil uyumluluk
+✅ P2 — TAMAMLANDI:
+  → Listing kalite skoru (CTR/benchmark + 4 faktör)
+  → Ürün yaşam döngüsü tespiti (EMA crossover)
+  → Strateji başarı panosu (/strategies/stats)
+  → Erken uyarı / hedef projeksiyon (lineer regresyon)
+  → Mobil uyumluluk (hamburger + overlay menü)
 
-P3 — Ay Sonu:
-  → Claude tool use
-  → Dayparting analizi
-  → Strateji karşılaştırma
-  → CSV export
+P3 — Sıradaki:
+  → Claude tool use (get_roas_trend, get_anomalies, vb.)
+  → Dayparting analizi (saat/gün ısı haritası)
+  → Dashboard tarih filtresi (DateRangePicker)
+  → Strateji karşılaştırma (yan yana görünüm)
+  → CSV export (strateji + dashboard)
 
 P4 — Uzun Vade:
-  → Multi-platform adapter
-  → LSTM anomali tespiti
-  → WebSocket real-time
-  → Prompt cache optimizasyonu
+  → Multi-platform adapter (Amazon, Shopify, TikTok)
+  → LSTM anomali tespiti (Z-score yerine öğrenen model)
+  → WebSocket real-time dashboard
+  → Prompt cache optimizasyonu (seller başına kalıcı bağlam)
 ```
