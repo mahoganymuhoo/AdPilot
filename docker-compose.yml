@@ -1,0 +1,92 @@
+version: "3.9"
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: adpilot_db
+    environment:
+      POSTGRES_DB: adpilot
+      POSTGRES_USER: adpilot
+      POSTGRES_PASSWORD: adpilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adpilot -d adpilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: adpilot_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: adpilot_backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://adpilot:adpilot@db:5432/adpilot
+      SYNC_DATABASE_URL: postgresql://adpilot:adpilot@db:5432/adpilot
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: adpilot_celery
+    environment:
+      DATABASE_URL: postgresql+asyncpg://adpilot:adpilot@db:5432/adpilot
+      SYNC_DATABASE_URL: postgresql://adpilot:adpilot@db:5432/adpilot
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: adpilot_celery_beat
+    environment:
+      DATABASE_URL: postgresql+asyncpg://adpilot:adpilot@db:5432/adpilot
+      SYNC_DATABASE_URL: postgresql://adpilot:adpilot@db:5432/adpilot
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,39 @@
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass
+class AnalysisResult:
+    provider: str
+    model: str
+    insight_type: str
+    result_json: dict[str, Any]
+    summary_text: str
+    prompt_tokens: int
+    completion_tokens: int
+    cache_hit: bool = False
+
+
+class LLMProvider(ABC):
+    """Tüm AI provider'ların uyguladığı ortak interface."""
+
+    @abstractmethod
+    async def analyze_profitability(self, metrics: dict, seller_context: dict) -> AnalysisResult:
+        """Reklam kârlılığını yorumla, break-even ACOS hesapla, bütçe önerisi ver."""
+        ...
+
+    @abstractmethod
+    async def score_ad_worthiness(self, product_metrics: dict, seller_context: dict) -> AnalysisResult:
+        """Bu ürüne reklam verilmeli mi? Skor ve gerekçe üret."""
+        ...
+
+    @abstractmethod
+    async def detect_anomaly_cause(self, anomaly: dict, history: list[dict]) -> AnalysisResult:
+        """Anomalinin olası nedenini yorumla ve önlem öner."""
+        ...
+
+    @abstractmethod
+    async def generate_budget_recommendation(self, products: list[dict], total_budget: float) -> AnalysisResult:
+        """Portföy genelinde bütçe dağılımı önerisi yap."""
+        ...
