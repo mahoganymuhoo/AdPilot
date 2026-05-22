@@ -399,6 +399,187 @@ def optimize_budget(
     return allocations
 
 
+# ─── Budget Saturation Curve ─────────────────────────────────────────────────
+
+@dataclass
+class SaturationCurveResult:
+    curve_points: list[dict]       # [{"budget": x, "projected_roas": y}, ...]
+    optimal_budget: float          # En yüksek verim noktası
+    current_efficiency_pct: float  # Mevcut bütçenin optimal'e % ne kadar yakın
+    diminishing_return_budget: float  # Verimin belirgin azaldığı nokta
+    recommendation: str
+
+
+def calculate_saturation_curve(
+    budget_roas_history: list[dict],  # [{"budget": 5.0, "roas": 4.2}, ...]
+    current_budget: float,
+    max_budget: float | None = None,
+) -> SaturationCurveResult:
+    """
+    Geçmiş (bütçe, ROAS) çiftlerine logaritmik fit uygular.
+    ROAS = a * ln(budget) + b
+    Veri yoksa veya az varsa sabit çarpan ile tahmin üretir.
+    """
+    if max_budget is None:
+        max_budget = current_budget * 5
+
+    # Logaritmik fit: en az 3 nokta gerekli
+    if len(budget_roas_history) >= 3:
+        budgets = [p["budget"] for p in budget_roas_history if p["budget"] > 0]
+        roas_vals = [p["roas"] for p in budget_roas_history if p["budget"] > 0]
+
+        # Manuel least squares: a, b için
+        ln_b = [math.log(b) for b in budgets]
+        n = len(budgets)
+        sum_x = sum(ln_b)
+        sum_y = sum(roas_vals)
+        sum_xy = sum(x * y for x, y in zip(ln_b, roas_vals))
+        sum_x2 = sum(x * x for x in ln_b)
+
+        denom = n * sum_x2 - sum_x ** 2
+        if abs(denom) < 1e-9:
+            a, b = 0.5, sum_y / n
+        else:
+            a = (n * sum_xy - sum_x * sum_y) / denom
+            b = (sum_y - a * sum_x) / n
+    else:
+        # Yeterli veri yok — tipik e-ticaret eğrisi kullan
+        if budget_roas_history:
+            ref = budget_roas_history[0]
+            ref_budget = max(ref["budget"], 1)
+            ref_roas = ref["roas"]
+        else:
+            ref_budget = current_budget
+            ref_roas = 3.0
+        a = ref_roas / (2 * math.log(max(ref_budget, 1) + 1))
+        b = ref_roas - a * math.log(max(ref_budget, 1))
+
+    # Eğri noktaları üret (20 nokta)
+    step = max_budget / 20
+    curve_points = []
+    for i in range(1, 22):
+        bgt = round(step * i, 2)
+        projected_roas = max(0.1, a * math.log(max(bgt, 0.01)) + b)
+        curve_points.append({"budget": bgt, "projected_roas": round(projected_roas, 3)})
+
+    # Optimal bütçe: marjinal ROAS artışının en yüksek olduğu nokta (türev max)
+    # d(ROAS)/d(budget) = a / budget → maksimum düşük bütçede, "optimal" eşiği belirle
+    # Pratik: ROAS'ın %80'ine ulaşılan minimum bütçe = optimal
+    max_roas = max(p["projected_roas"] for p in curve_points)
+    target_roas_threshold = max_roas * 0.80
+
+    optimal_budget = curve_points[0]["budget"]
+    for p in curve_points:
+        if p["projected_roas"] >= target_roas_threshold:
+            optimal_budget = p["budget"]
+            break
+
+    # Azalan verim noktası: ROAS artışının %10'un altına düştüğü yer
+    diminishing_budget = max_budget
+    for i in range(1, len(curve_points)):
+        prev = curve_points[i - 1]["projected_roas"]
+        curr = curve_points[i]["projected_roas"]
+        gain_pct = (curr - prev) / max(prev, 0.01) * 100
+        if gain_pct < 3:  # %3'ten az artış
+            diminishing_budget = curve_points[i]["budget"]
+            break
+
+    # Mevcut bütçe verimliliği
+    current_projected = max(0.1, a * math.log(max(current_budget, 0.01)) + b)
+    efficiency_pct = min(100.0, round((current_projected / max_roas) * 100, 1))
+
+    if current_budget < optimal_budget * 0.7:
+        recommendation = f"Bütçeni ${optimal_budget:.0f}/güne artır — ROAS %{80} verimine ulaşırsın."
+    elif current_budget > diminishing_budget:
+        recommendation = f"${diminishing_budget:.0f}/gün üzerinde ek harcama çok az ROAS kazanımı sağlıyor."
+    else:
+        recommendation = "Mevcut bütçen verimli aralıkta. Büyük değişiklik gerekmez."
+
+    return SaturationCurveResult(
+        curve_points=curve_points,
+        optimal_budget=round(optimal_budget, 2),
+        current_efficiency_pct=efficiency_pct,
+        diminishing_return_budget=round(diminishing_budget, 2),
+        recommendation=recommendation,
+    )
+
+
+# ─── Break-even Stress Test ───────────────────────────────────────────────────
+
+@dataclass
+class StressScenario:
+    label: str
+    cogs_change_pct: float
+    new_cogs: float
+    new_break_even_acos: float
+    new_net_profit: float
+    is_still_profitable: bool
+    margin_change_pts: float   # Kâr marjı değişimi (puan)
+
+
+@dataclass
+class StressTestResult:
+    base_break_even_acos: float
+    base_net_profit: float
+    scenarios: list[StressScenario]
+    safe_up_to_cogs_increase: float  # % — karlılığın korunduğu max COGS artışı
+
+
+def stress_test_breakeven(
+    price: float,
+    cogs: float,
+    shipping_cost: float,
+    current_acos: float,
+    cogs_change_steps: list[float] | None = None,
+) -> StressTestResult:
+    """
+    COGS artışı senaryolarında karlılık simülasyonu.
+    Döndürür: Her senaryo için break-even ACOS ve net kâr.
+    """
+    ETSY_FEE_PCT = 0.065
+    LISTING_FEE = 0.20
+
+    if cogs_change_steps is None:
+        cogs_change_steps = [-20, -10, 0, 10, 20, 30, 50]
+
+    def calc(new_cogs: float) -> tuple[float, float, float]:
+        fees = price * ETSY_FEE_PCT + LISTING_FEE
+        net_profit = price - new_cogs - shipping_cost - fees
+        margin = net_profit / price if price > 0 else 0
+        be_acos = max(0.0, margin * 100)
+        return be_acos, net_profit, margin * 100
+
+    base_be, base_np, base_margin = calc(cogs)
+
+    scenarios = []
+    safe_up_to = 0.0
+
+    for pct in cogs_change_steps:
+        new_cogs = round(cogs * (1 + pct / 100), 2)
+        be, np_, margin = calc(new_cogs)
+        is_profitable = current_acos <= be
+
+        if pct > 0 and is_profitable:
+            safe_up_to = pct
+
+        scenarios.append(StressScenario(
+            label=f"COGS {'+' if pct >= 0 else ''}{pct}%",
+            cogs_change_pct=pct,
+            new_cogs=new_cogs,
+            new_break_even_acos=round(be, 2),
+            new_net_profit=round(np_, 2),
+            is_still_profitable=is_profitable,
+            margin_change_pts=round(margin - base_margin, 2),
+        ))
+
+    return StressTestResult(
+        base_break_even_acos=round(base_be, 2),
+        base_net_profit=round(base_np, 2),
+        scenarios=scenarios,
+        safe_up_to_cogs_increase=safe_up_to,
+    )
+
+
 # ─── Attribution Modeli ───────────────────────────────────────────────────────
 
 @dataclass

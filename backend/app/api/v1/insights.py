@@ -7,7 +7,10 @@ from app.models.ad_metrics import AdMetric
 from app.models.product import Product
 from app.models.seller import Seller
 from app.models.ai_insight import AIInsight
-from app.services.analytics import calculate_ad_worthiness, optimize_budget
+from app.services.analytics import (
+    calculate_ad_worthiness, optimize_budget,
+    calculate_saturation_curve, stress_test_breakeven,
+)
 from app.services.llm import get_llm_provider
 from app.schemas.insights import InsightResponse, AdWorthinessResponse, BudgetRecommendationResponse
 
@@ -174,6 +177,117 @@ async def get_budget_recommendation(
         strategy_summary=strategy_summary,
         ai_analysis=ai_analysis,
     )
+
+
+@router.get("/product/{product_id}/saturation-curve")
+async def get_saturation_curve(
+    product_id: int,
+    seller_id: int = 1,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Bütçe → ROAS eğrisi. "Daha fazla harcasam ne olur?" sorusunu cevaplar.
+    """
+    seller_q = await db.execute(select(Seller).where(Seller.id == seller_id))
+    seller = seller_q.scalar_one_or_none()
+    if not seller:
+        raise HTTPException(404, "Seller bulunamadı.")
+
+    since = datetime.now(timezone.utc) - timedelta(days=90)
+    metrics_q = await db.execute(
+        select(AdMetric)
+        .where(AdMetric.product_id == product_id, AdMetric.time >= since)
+        .order_by(AdMetric.time)
+    )
+    metrics = list(metrics_q.scalars().all())
+
+    # Haftalık gruplar halinde (bütçe, ROAS) çiftleri oluştur
+    history: list[dict] = []
+    for m in metrics:
+        if m.ad_spend and m.ad_spend > 0 and m.roas and m.roas > 0:
+            history.append({"budget": round(m.ad_spend, 2), "roas": round(m.roas, 3)})
+
+    current_budget = seller.daily_budget / max(1, 1)
+
+    result = calculate_saturation_curve(
+        budget_roas_history=history,
+        current_budget=current_budget,
+    )
+
+    return {
+        "product_id": product_id,
+        "current_budget": current_budget,
+        "curve_points": result.curve_points,
+        "optimal_budget": result.optimal_budget,
+        "current_efficiency_pct": result.current_efficiency_pct,
+        "diminishing_return_budget": result.diminishing_return_budget,
+        "recommendation": result.recommendation,
+        "data_points_used": len(history),
+    }
+
+
+@router.get("/product/{product_id}/stress-test")
+async def get_stress_test(
+    product_id: int,
+    seller_id: int = 1,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    COGS değişim senaryolarında karlılık simülasyonu.
+    """
+    product_q = await db.execute(select(Product).where(Product.id == product_id))
+    product = product_q.scalar_one_or_none()
+    if not product:
+        raise HTTPException(404, "Ürün bulunamadı.")
+
+    seller_q = await db.execute(select(Seller).where(Seller.id == seller_id))
+    seller = seller_q.scalar_one_or_none()
+    if not seller:
+        raise HTTPException(404, "Seller bulunamadı.")
+
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    metrics_q = await db.execute(
+        select(AdMetric)
+        .where(AdMetric.product_id == product_id, AdMetric.time >= since)
+    )
+    metrics = list(metrics_q.scalars().all())
+
+    total_revenue = sum(m.revenue for m in metrics)
+    total_ad_spend = sum(m.ad_spend for m in metrics)
+    current_acos = (total_ad_spend / total_revenue * 100) if total_revenue > 0 else 50.0
+
+    price = product.price or (total_revenue / max(sum(m.conversions for m in metrics), 1))
+    cogs = product.cogs or (price * 0.3)
+    shipping = product.shipping_cost or 0.0
+
+    result = stress_test_breakeven(
+        price=price,
+        cogs=cogs,
+        shipping_cost=shipping,
+        current_acos=current_acos,
+    )
+
+    return {
+        "product_id": product_id,
+        "price": round(price, 2),
+        "current_cogs": round(cogs, 2),
+        "current_acos": round(current_acos, 2),
+        "base_break_even_acos": result.base_break_even_acos,
+        "base_net_profit": result.base_net_profit,
+        "safe_up_to_cogs_increase": result.safe_up_to_cogs_increase,
+        "scenarios": [
+            {
+                "label": s.label,
+                "cogs_change_pct": s.cogs_change_pct,
+                "new_cogs": s.new_cogs,
+                "new_break_even_acos": s.new_break_even_acos,
+                "new_net_profit": s.new_net_profit,
+                "is_still_profitable": s.is_still_profitable,
+                "margin_change_pts": s.margin_change_pts,
+            }
+            for s in result.scenarios
+        ],
+    }
 
 
 @router.get("/product/{product_id}/profitability-ai", response_model=InsightResponse)
