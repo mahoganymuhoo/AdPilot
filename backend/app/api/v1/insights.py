@@ -10,6 +10,7 @@ from app.models.ai_insight import AIInsight
 from app.services.analytics import (
     calculate_ad_worthiness, optimize_budget,
     calculate_saturation_curve, stress_test_breakeven,
+    calculate_listing_quality, detect_product_lifecycle,
 )
 from app.services.llm import get_llm_provider
 from app.schemas.insights import InsightResponse, AdWorthinessResponse, BudgetRecommendationResponse
@@ -177,6 +178,86 @@ async def get_budget_recommendation(
         strategy_summary=strategy_summary,
         ai_analysis=ai_analysis,
     )
+
+
+@router.get("/product/{product_id}/listing-quality")
+async def get_listing_quality(
+    product_id: int,
+    seller_id: int = 1,
+    db: AsyncSession = Depends(get_db),
+):
+    """Listing kalite skoru: CTR / kategori benchmark karşılaştırması."""
+    product_q = await db.execute(select(Product).where(Product.id == product_id))
+    product = product_q.scalar_one_or_none()
+    if not product:
+        raise HTTPException(404, "Ürün bulunamadı.")
+
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    metrics_q = await db.execute(
+        select(AdMetric)
+        .where(AdMetric.product_id == product_id, AdMetric.time >= since)
+    )
+    metrics = list(metrics_q.scalars().all())
+
+    total_impressions = sum(getattr(m, "impressions", 0) or 0 for m in metrics)
+    total_clicks = sum(m.clicks for m in metrics)
+    product_ctr = total_clicks / total_impressions if total_impressions > 0 else 0.018
+
+    category = getattr(product, "category", "default") or "default"
+
+    result = calculate_listing_quality(
+        product_ctr=product_ctr,
+        category=category,
+        image_count=getattr(product, "image_count", 1) or 1,
+        has_video=getattr(product, "has_video", False) or False,
+        review_count=getattr(product, "review_count", 0) or 0,
+        avg_rating=getattr(product, "avg_rating", 0.0) or 0.0,
+    )
+
+    return {
+        "product_id": product_id,
+        "score": result.score,
+        "grade": result.grade,
+        "ctr_ratio": result.ctr_ratio,
+        "product_ctr_pct": round(result.product_ctr * 100, 2),
+        "category_avg_ctr_pct": round(result.category_avg_ctr * 100, 2),
+        "category": result.category,
+        "recommendation": result.recommendation,
+        "issues": result.issues,
+        "strengths": result.strengths,
+    }
+
+
+@router.get("/product/{product_id}/lifecycle")
+async def get_product_lifecycle(
+    product_id: int,
+    seller_id: int = 1,
+    db: AsyncSession = Depends(get_db),
+):
+    """Ürün yaşam döngüsü evresi: launch / growth / mature / declining."""
+    since = datetime.now(timezone.utc) - timedelta(days=90)
+    metrics_q = await db.execute(
+        select(AdMetric)
+        .where(AdMetric.product_id == product_id, AdMetric.time >= since)
+        .order_by(AdMetric.time)
+    )
+    metrics = list(metrics_q.scalars().all())
+    roas_history = [m.roas or 0.0 for m in metrics]
+
+    result = detect_product_lifecycle(roas_history=roas_history)
+
+    return {
+        "product_id": product_id,
+        "stage": result.stage,
+        "label": result.label,
+        "confidence": result.confidence,
+        "roas_trend_pct": result.roas_trend_pct,
+        "ema_7d": result.ema_7d,
+        "ema_30d": result.ema_30d,
+        "days_with_data": result.days_with_data,
+        "recommendation": result.recommendation,
+        "next_action": result.next_action,
+    }
 
 
 @router.get("/product/{product_id}/saturation-curve")

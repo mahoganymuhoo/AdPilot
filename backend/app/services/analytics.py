@@ -5,6 +5,10 @@ Temel analitik algoritmalar:
 - Z-Score anomali tespiti
 - Ad Worthiness Score
 - Bütçe optimizasyonu (gradient descent)
+- Budget Saturation Curve (logaritmik fit)
+- Break-even Stress Test (senaryo matrisi)
+- Listing Kalite Skoru (CTR / kategori benchmark)
+- Ürün Yaşam Döngüsü (launch/growth/mature/declining)
 - Attribution modeli
 """
 from __future__ import annotations
@@ -577,6 +581,333 @@ def stress_test_breakeven(
         base_net_profit=round(base_np, 2),
         scenarios=scenarios,
         safe_up_to_cogs_increase=safe_up_to,
+    )
+
+
+# ─── Listing Kalite Skoru ────────────────────────────────────────────────────
+
+# Etsy kategori bazında ortalama CTR benchmark'ları (tahmini, güncellenir)
+CATEGORY_CTR_BENCHMARKS: dict[str, float] = {
+    "jewelry": 0.022,
+    "home_decor": 0.018,
+    "clothing": 0.020,
+    "art": 0.015,
+    "craft_supplies": 0.014,
+    "toys": 0.019,
+    "wedding": 0.025,
+    "baby": 0.021,
+    "default": 0.018,  # Kategori bilinmiyorsa
+}
+
+
+@dataclass
+class ListingQualityResult:
+    score: int                    # 0-100
+    grade: Literal["poor", "average", "good", "excellent"]
+    ctr_ratio: float              # Ürün CTR / Kategori ortalama
+    product_ctr: float
+    category_avg_ctr: float
+    category: str
+    recommendation: str
+    issues: list[str]
+    strengths: list[str]
+
+
+def calculate_listing_quality(
+    product_ctr: float,           # Ondalık (0.018 = %1.8)
+    category: str = "default",
+    title_word_count: int | None = None,
+    has_video: bool = False,
+    image_count: int = 1,
+    review_count: int = 0,
+    avg_rating: float = 0.0,
+) -> ListingQualityResult:
+    """
+    Listing kalitesini CTR / kategori benchmark oranı üzerinden hesaplar.
+    Ek sinyal: görsel sayısı, video, başlık uzunluğu, değerlendirme.
+    """
+    bench = CATEGORY_CTR_BENCHMARKS.get(category, CATEGORY_CTR_BENCHMARKS["default"])
+    ctr_ratio = product_ctr / bench if bench > 0 else 1.0
+
+    score = 0
+    issues: list[str] = []
+    strengths: list[str] = []
+
+    # CTR oranı (maks 50 puan)
+    if ctr_ratio >= 1.5:
+        score += 50
+        strengths.append(f"CTR kategori ortalamasının {ctr_ratio:.1f}x üzerinde.")
+    elif ctr_ratio >= 1.1:
+        score += 38
+        strengths.append("CTR kategori ortalamasının üzerinde.")
+    elif ctr_ratio >= 0.8:
+        score += 25
+    elif ctr_ratio >= 0.5:
+        score += 12
+        issues.append("CTR kategori ortalamasının oldukça altında — ana fotoğrafı güncelle.")
+    else:
+        score += 0
+        issues.append("CTR çok düşük. Fotoğraf, başlık veya fiyat ciddi şekilde revize edilmeli.")
+
+    # Görsel sayısı (maks 20 puan)
+    if image_count >= 8:
+        score += 20
+        strengths.append("Yeterli görsel sayısı (8+).")
+    elif image_count >= 5:
+        score += 14
+    elif image_count >= 3:
+        score += 8
+        issues.append("Görsel sayısını 5+ çıkarmak tıklama oranını artırır.")
+    else:
+        score += 0
+        issues.append("Görsel sayısı çok az (1-2). En az 5 fotoğraf ekle.")
+
+    # Video (10 puan)
+    if has_video:
+        score += 10
+        strengths.append("Video var — listing dönüşüm oranını artırır.")
+    else:
+        issues.append("Video yok. Ürün videosu CTR'ı %15-25 artırabilir.")
+
+    # Başlık uzunluğu (10 puan)
+    if title_word_count is not None:
+        if 8 <= title_word_count <= 15:
+            score += 10
+            strengths.append("Başlık uzunluğu ideal aralıkta.")
+        elif title_word_count < 6:
+            score += 3
+            issues.append("Başlık çok kısa — anahtar kelimeleri artır (8-15 kelime ideal).")
+        elif title_word_count > 20:
+            score += 5
+            issues.append("Başlık çok uzun — arama algoritması ilk 10 kelimeye ağırlık verir.")
+    else:
+        score += 5  # Bilgi yoksa orta puan
+
+    # Değerlendirmeler (10 puan)
+    if review_count >= 50 and avg_rating >= 4.8:
+        score += 10
+        strengths.append(f"{review_count} değerlendirme, {avg_rating:.1f} ortalama — güçlü sosyal kanıt.")
+    elif review_count >= 10 and avg_rating >= 4.5:
+        score += 7
+    elif review_count >= 3:
+        score += 4
+    else:
+        issues.append("Yorum sayısı az — müşterilere yorum bırakmaları için teşvik et.")
+
+    score = min(score, 100)
+
+    if score >= 80:
+        grade: Literal["poor", "average", "good", "excellent"] = "excellent"
+        recommendation = "Listing çok güçlü. Reklam verimli olacak — bütçeyi artırmayı düşün."
+    elif score >= 60:
+        grade = "good"
+        recommendation = "Listing iyi durumda. Küçük iyileştirmelerle reklam verimini artırabilirsin."
+    elif score >= 40:
+        grade = "average"
+        recommendation = "Listing ortalama. Reklamdan önce fotoğraf ve başlığı iyileştir."
+    else:
+        grade = "poor"
+        recommendation = "Listing zayıf. Reklamdan önce ciddi revizyon gerekiyor — şu an harcama israfı olur."
+
+    return ListingQualityResult(
+        score=score,
+        grade=grade,
+        ctr_ratio=round(ctr_ratio, 2),
+        product_ctr=round(product_ctr, 4),
+        category_avg_ctr=round(bench, 4),
+        category=category,
+        recommendation=recommendation,
+        issues=issues,
+        strengths=strengths,
+    )
+
+
+# ─── Ürün Yaşam Döngüsü ──────────────────────────────────────────────────────
+
+@dataclass
+class LifecycleResult:
+    stage: Literal["launch", "growth", "mature", "declining"]
+    label: str
+    confidence: Literal["low", "medium", "high"]
+    roas_trend_pct: float          # Son 14 gün vs önceki 14 gün, %
+    ema_7d: float
+    ema_30d: float
+    days_with_data: int
+    recommendation: str
+    next_action: str
+
+
+def detect_product_lifecycle(
+    roas_history: list[float],    # Günlük ROAS listesi (kronolojik, en eski → en yeni)
+    seasonal_index: float = 0.5,  # 0-1: 1 = yoğun sezon
+) -> LifecycleResult:
+    """
+    Ürünün yaşam döngüsü evresini belirler.
+    launch → growth → mature → declining
+    """
+    n = len(roas_history)
+
+    if n < 7:
+        return LifecycleResult(
+            stage="launch", label="Başlangıç",
+            confidence="low",
+            roas_trend_pct=0.0, ema_7d=0.0, ema_30d=0.0,
+            days_with_data=n,
+            recommendation="Yeterli veri yok. 14 gün daha bekle, ardından analiz et.",
+            next_action="Veri toplamaya devam et.",
+        )
+
+    # EMA hesapla
+    def ema(values: list[float], period: int) -> float:
+        k = 2 / (period + 1)
+        result = values[0]
+        for v in values[1:]:
+            result = v * k + result * (1 - k)
+        return result
+
+    ema_7 = ema(roas_history[-min(30, n):], 7)
+    ema_30 = ema(roas_history[-min(90, n):], 30) if n >= 30 else ema(roas_history, n)
+
+    # Son 14 gün vs önceki 14 gün trend
+    if n >= 28:
+        recent_14 = sum(roas_history[-14:]) / 14
+        prev_14 = sum(roas_history[-28:-14]) / 14
+        trend_pct = ((recent_14 - prev_14) / max(prev_14, 0.01)) * 100
+    elif n >= 14:
+        recent_7 = sum(roas_history[-7:]) / 7
+        first_7 = sum(roas_history[:7]) / 7
+        trend_pct = ((recent_7 - first_7) / max(first_7, 0.01)) * 100
+    else:
+        trend_pct = 0.0
+
+    # Evre tespiti
+    if n < 30:
+        stage: Literal["launch", "growth", "mature", "declining"] = "launch"
+        label = "Başlangıç"
+        confidence: Literal["low", "medium", "high"] = "low"
+        recommendation = "Ürün yeni. İlk 30 günde çok yorumlama yapma, veri biriktir."
+        next_action = "14 gün daha bekle, sonra trend analizi yap."
+    elif trend_pct > 5 and ema_7 > ema_30 * 0.95:
+        stage = "growth"
+        label = "Büyüme"
+        confidence = "medium" if n < 60 else "high"
+        recommendation = "ROAS artıyor. Bütçeyi agresif artır, momentumu yakala."
+        next_action = "Bütçeyi %20-30 artır. 7 günde bir kontrol et."
+    elif trend_pct < -10 and ema_7 < ema_30 * 0.9 and seasonal_index < 0.4:
+        stage = "declining"
+        label = "Düşüş"
+        confidence = "medium"
+        recommendation = "ROAS düşüyor ve sezon baskısı yok. Listing yenile veya reklamı durdur."
+        next_action = "Listing'i güncelle (fotoğraf, başlık, fiyat). 14 gün bekle, iyileşmezse durdur."
+    elif trend_pct < -10 and seasonal_index >= 0.4:
+        stage = "declining"
+        label = "Sezonsal Düşüş"
+        confidence = "medium"
+        recommendation = "Düşüş büyük ihtimalle mevsimsel. Sezon dönene kadar bütçeyi azalt."
+        next_action = "Bütçeyi %40 azalt. Yoğun sezon öncesi tekrar değerlendir."
+    else:
+        stage = "mature"
+        label = "Olgunluk"
+        confidence = "high" if n >= 60 else "medium"
+        recommendation = "Stabil seyir. Mevcut bütçeyi koru, küçük optimizasyonlar yap."
+        next_action = "A/B test: farklı anahtar kelime grubu veya bütçe zamanlaması dene."
+
+    return LifecycleResult(
+        stage=stage,
+        label=label,
+        confidence=confidence,
+        roas_trend_pct=round(trend_pct, 1),
+        ema_7d=round(ema_7, 3),
+        ema_30d=round(ema_30, 3),
+        days_with_data=n,
+        recommendation=recommendation,
+        next_action=next_action,
+    )
+
+
+# ─── Strateji Projeksiyon (Erken Uyarı) ──────────────────────────────────────
+
+@dataclass
+class StrategyProjection:
+    current_progress_pct: float
+    projected_completion_day: int   # Kaçıncı günde hedefe ulaşılır (tahmin)
+    will_meet_deadline: bool
+    days_remaining: int
+    velocity: float                  # Günlük ilerleme hızı (%/gün)
+    warning: str | None
+    confidence: Literal["low", "medium", "high"]
+
+
+def project_strategy_outcome(
+    checkpoints: list[dict],         # [{"day": 3, "progress_pct": 40}, ...]
+    target_date_days: int,           # Toplam süre (gün)
+    days_elapsed: int,
+) -> StrategyProjection:
+    """
+    Mevcut checkpoint verisiyle lineer ekstrapolasyon.
+    "Bu hızla giderse hedefe kaç günde ulaşılır?"
+    """
+    days_remaining = max(0, target_date_days - days_elapsed)
+
+    if not checkpoints or days_elapsed == 0:
+        return StrategyProjection(
+            current_progress_pct=0, projected_completion_day=target_date_days,
+            will_meet_deadline=True, days_remaining=days_remaining,
+            velocity=0, warning=None, confidence="low",
+        )
+
+    current_pct = checkpoints[-1].get("progress_pct", 0)
+
+    # Lineer regresyon: (gün, ilerleme) çiftleri
+    if len(checkpoints) >= 2:
+        days_list = [cp.get("day", i * 3) for i, cp in enumerate(checkpoints)]
+        pct_list = [cp.get("progress_pct", 0) for cp in checkpoints]
+        n = len(days_list)
+        sum_x = sum(days_list)
+        sum_y = sum(pct_list)
+        sum_xy = sum(x * y for x, y in zip(days_list, pct_list))
+        sum_x2 = sum(x * x for x in days_list)
+        denom = n * sum_x2 - sum_x ** 2
+        velocity = (n * sum_xy - sum_x * sum_y) / denom if abs(denom) > 1e-9 else 0
+    else:
+        velocity = current_pct / max(days_elapsed, 1)
+
+    velocity = max(0.0, velocity)
+
+    # %100'e ulaşmak için gereken gün
+    remaining_pct = max(0, 100 - current_pct)
+    if velocity > 0:
+        days_to_complete = remaining_pct / velocity
+        projected_day = days_elapsed + days_to_complete
+    else:
+        projected_day = target_date_days * 2  # Çok uzun
+
+    will_meet = projected_day <= target_date_days
+
+    # Uyarı mesajı
+    warning = None
+    if not will_meet:
+        overshoot = projected_day - target_date_days
+        warning = (
+            f"Mevcut hızda hedefe {projected_day:.0f}. günde ulaşırsın "
+            f"(hedef: {target_date_days}. gün). {overshoot:.0f} gün geç."
+        )
+    elif projected_day < target_date_days * 0.7:
+        warning = None  # Erken bitecek — iyi haber
+
+    confidence: Literal["low", "medium", "high"] = (
+        "high" if len(checkpoints) >= 3 else
+        "medium" if len(checkpoints) == 2 else "low"
+    )
+
+    return StrategyProjection(
+        current_progress_pct=round(current_pct, 1),
+        projected_completion_day=round(projected_day),
+        will_meet_deadline=will_meet,
+        days_remaining=days_remaining,
+        velocity=round(velocity, 2),
+        warning=warning,
+        confidence=confidence,
     )
 
 

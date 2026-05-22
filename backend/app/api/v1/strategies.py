@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.strategy import Strategy, StrategyCheckpoint, StrategyOutcome
 from app.services.llm.factory import get_llm_provider
+from app.services.analytics import project_strategy_outcome
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
@@ -348,6 +349,133 @@ async def complete_strategy(
         "verdict_reasoning": r.get("verdict_reasoning"),
         "ai_provider": result.provider,
         "tokens_used": result.prompt_tokens + result.completion_tokens,
+    }
+
+
+@router.get("/stats")
+async def get_strategy_stats(seller_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Strateji başarı panosu: operasyon tipine göre istatistikler.
+    Yeni strateji başlatılırken AI'a context olarak beslenir.
+    """
+    # Tamamlanan stratejiler
+    outcomes_q = await db.execute(
+        select(StrategyOutcome, Strategy)
+        .join(Strategy, StrategyOutcome.strategy_id == Strategy.id)
+        .where(Strategy.seller_id == seller_id)
+    )
+    rows = outcomes_q.all()
+
+    if not rows:
+        return {
+            "total_completed": 0,
+            "overall_success_rate": 0,
+            "by_operation_type": {},
+            "avg_timeline_days": 0,
+            "most_successful_operation": None,
+            "ai_context_summary": "Henüz tamamlanmış strateji yok.",
+        }
+
+    by_op: dict[str, dict] = {}
+    total_days = 0
+
+    for outcome, strategy in rows:
+        op = strategy.operation_type
+        if op not in by_op:
+            by_op[op] = {"total": 0, "success": 0, "partial": 0, "failed": 0, "total_days": 0}
+
+        by_op[op]["total"] += 1
+        by_op[op][outcome.outcome] = by_op[op].get(outcome.outcome, 0) + 1
+
+        days = (outcome.completed_at - strategy.initiated_at).days
+        by_op[op]["total_days"] += days
+        total_days += days
+
+    # Başarı oranları
+    result_by_op = {}
+    for op, data in by_op.items():
+        success_rate = round((data["success"] + data["partial"] * 0.5) / data["total"] * 100, 1)
+        result_by_op[op] = {
+            "total": data["total"],
+            "success": data.get("success", 0),
+            "partial": data.get("partial", 0),
+            "failed": data.get("failed", 0),
+            "success_rate_pct": success_rate,
+            "avg_days": round(data["total_days"] / data["total"], 1),
+        }
+
+    total = len(rows)
+    overall_success = sum(
+        (d["success"] + d["partial"] * 0.5) for d in result_by_op.values()
+    ) / total * 100
+
+    best_op = max(result_by_op.items(), key=lambda x: x[1]["success_rate_pct"])[0]
+
+    # AI için bağlam özeti
+    ai_summary = (
+        f"{total} tamamlanmış strateji. Genel başarı oranı: %{overall_success:.0f}. "
+        f"En başarılı operasyon: '{best_op}'. "
+        + " | ".join(
+            f"{op}: %{d['success_rate_pct']} başarı ({d['total']} strateji)"
+            for op, d in result_by_op.items()
+        )
+    )
+
+    return {
+        "total_completed": total,
+        "overall_success_rate": round(overall_success, 1),
+        "by_operation_type": result_by_op,
+        "avg_timeline_days": round(total_days / total, 1) if total else 0,
+        "most_successful_operation": best_op,
+        "ai_context_summary": ai_summary,
+    }
+
+
+@router.get("/{strategy_id}/projection")
+async def get_strategy_projection(strategy_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Erken uyarı: mevcut hızla hedefe ulaşılır mı?
+    Checkpoint verisiyle lineer ekstrapolasyon.
+    """
+    s = await db.get(Strategy, strategy_id)
+    if not s:
+        raise HTTPException(404, "Strategy not found")
+
+    cp_result = await db.execute(
+        select(StrategyCheckpoint)
+        .where(StrategyCheckpoint.strategy_id == strategy_id)
+        .order_by(StrategyCheckpoint.checked_at)
+    )
+    checkpoints = cp_result.scalars().all()
+
+    timeline_days = (s.target_date - s.initiated_at).days
+    days_elapsed = (datetime.utcnow() - s.initiated_at).days
+
+    checkpoint_data = [
+        {
+            "day": (cp.checked_at - s.initiated_at).days,
+            "progress_pct": cp.progress_pct or 0,
+        }
+        for cp in checkpoints
+    ]
+
+    proj = project_strategy_outcome(
+        checkpoints=checkpoint_data,
+        target_date_days=timeline_days,
+        days_elapsed=days_elapsed,
+    )
+
+    return {
+        "strategy_id": strategy_id,
+        "current_progress_pct": proj.current_progress_pct,
+        "projected_completion_day": proj.projected_completion_day,
+        "will_meet_deadline": proj.will_meet_deadline,
+        "days_remaining": proj.days_remaining,
+        "velocity_per_day": proj.velocity,
+        "warning": proj.warning,
+        "confidence": proj.confidence,
+        "timeline_days": timeline_days,
+        "days_elapsed": days_elapsed,
     }
 
 
