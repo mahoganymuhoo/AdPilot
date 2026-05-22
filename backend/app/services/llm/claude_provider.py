@@ -237,3 +237,218 @@ Bu ürün portföyü için günlük {total_budget}$ bütçeyi en verimli şekild
             completion_tokens=usage.output_tokens,
             cache_hit=getattr(usage, "cache_read_input_tokens", 0) > 0,
         )
+
+    async def launch_strategy(
+        self,
+        recommendation: dict,
+        initial_metrics: dict,
+        seller_context: dict,
+        action_confirmed: str,
+    ) -> AnalysisResult:
+        prompt = f"""<seller_context>
+{json.dumps(seller_context, ensure_ascii=False, indent=2)}
+</seller_context>
+
+<original_recommendation>
+{json.dumps(recommendation, ensure_ascii=False, indent=2)}
+</original_recommendation>
+
+<initial_metrics>
+{json.dumps(initial_metrics, ensure_ascii=False, indent=2)}
+</initial_metrics>
+
+<action_confirmed_by_seller>
+{action_confirmed}
+</action_confirmed_by_seller>
+
+<task>
+Satıcı bu aksiyonu aldı. Bu kararı değerlendir, başarı hedeflerini say ve takip takvimi oluştur.
+JSON formatında döndür:
+{{
+  "strategy_name": "kısa açıklayıcı isim (ör: Seramik Kupa — Bütçe Artışı)",
+  "operation_type": "increase_budget|reduce_budget|pause_ads|optimize_listing|test_budget",
+  "goal_summary": "tek cümle hedef",
+  "target_metrics": {{
+    "roas": 0.0,
+    "acos": 0.0,
+    "daily_revenue": 0.0,
+    "conversions_per_day": 0.0
+  }},
+  "timeline_days": 14,
+  "check_interval_days": 3,
+  "success_criteria": ["kriter 1", "kriter 2", "kriter 3"],
+  "watch_metrics": ["ROAS", "CTR", "ACOS"],
+  "risk_factors": ["risk 1", "risk 2"],
+  "baseline_summary": "başlangıç durumu kısa özeti",
+  "action_assessment": "alınan aksiyonun değerlendirmesi",
+  "confidence": "low|medium|high",
+  "reasoning": "genel gerekçe"
+}}
+</task>"""
+
+        response = await self.client.messages.create(
+            model=self.model,
+            max_tokens=1200,
+            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        text = response.content[0].text
+        try:
+            result_json = json.loads(text)
+        except json.JSONDecodeError:
+            import re
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            result_json = json.loads(match.group()) if match else {"raw": text}
+
+        usage = response.usage
+        return AnalysisResult(
+            provider="claude", model=self.model, insight_type="strategy_launch",
+            result_json=result_json, summary_text=result_json.get("goal_summary", ""),
+            prompt_tokens=usage.input_tokens, completion_tokens=usage.output_tokens,
+            cache_hit=getattr(usage, "cache_read_input_tokens", 0) > 0,
+        )
+
+    async def monitor_strategy(
+        self,
+        strategy: dict,
+        checkpoints: list[dict],
+        current_metrics: dict,
+        days_elapsed: int,
+        days_remaining: int,
+    ) -> AnalysisResult:
+        prompt = f"""<strategy>
+{json.dumps(strategy, ensure_ascii=False, indent=2)}
+</strategy>
+
+<checkpoint_history>
+{json.dumps(checkpoints, ensure_ascii=False, indent=2)}
+</checkpoint_history>
+
+<current_metrics>
+{json.dumps(current_metrics, ensure_ascii=False, indent=2)}
+</current_metrics>
+
+<timeline>
+Başlangıçtan bu yana geçen gün: {days_elapsed}
+Kalan gün: {days_remaining}
+</timeline>
+
+<task>
+Bu stratejinin gidişatını değerlendir. Hedeflere ulaşılıyor mu?
+Geçmiş checkpoint'leri ile bugünkü durumu karşılaştır, trend çiz.
+JSON formatında döndür:
+{{
+  "status": "on_track|at_risk|off_track",
+  "progress_pct": 0.0,
+  "metric_deltas": {{
+    "roas_change": 0.0,
+    "acos_change": 0.0,
+    "revenue_change_pct": 0.0
+  }},
+  "trend": "improving|stable|declining",
+  "milestone_hit": true/false,
+  "adjustment_needed": true/false,
+  "adjustment": {{
+    "type": "increase_budget|decrease_budget|pause|none",
+    "amount_pct": 0,
+    "reason": "neden"
+  }},
+  "checkpoint_insight": "bu kontrol noktasında ne görüyoruz",
+  "red_flags": [],
+  "next_checkpoint_focus": "bir sonraki kontrolde neye bakacağız",
+  "reasoning": "detaylı değerlendirme"
+}}
+</task>"""
+
+        response = await self.client.messages.create(
+            model=self.model,
+            max_tokens=1200,
+            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        text = response.content[0].text
+        try:
+            result_json = json.loads(text)
+        except json.JSONDecodeError:
+            import re
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            result_json = json.loads(match.group()) if match else {"raw": text}
+
+        usage = response.usage
+        return AnalysisResult(
+            provider="claude", model=self.model, insight_type="strategy_monitor",
+            result_json=result_json, summary_text=result_json.get("checkpoint_insight", ""),
+            prompt_tokens=usage.input_tokens, completion_tokens=usage.output_tokens,
+            cache_hit=getattr(usage, "cache_read_input_tokens", 0) > 0,
+        )
+
+    async def verdict_strategy(
+        self,
+        strategy: dict,
+        checkpoints: list[dict],
+        final_metrics: dict,
+    ) -> AnalysisResult:
+        prompt = f"""<strategy>
+{json.dumps(strategy, ensure_ascii=False, indent=2)}
+</strategy>
+
+<checkpoint_history>
+{json.dumps(checkpoints, ensure_ascii=False, indent=2)}
+</checkpoint_history>
+
+<final_metrics>
+{json.dumps(final_metrics, ensure_ascii=False, indent=2)}
+</final_metrics>
+
+<task>
+Strateji süresi doldu. Tüm süreci değerlendir. Başlangıçtan bugüne ne değişti?
+Hedeflere ulaşıldı mı? Öğrenilenleri çıkar. Bir sonraki stratejiye ne taşımalıyız?
+JSON formatında döndür:
+{{
+  "outcome": "success|partial|failed",
+  "outcome_summary": "tek cümle sonuç",
+  "metric_results": {{
+    "roas_start": 0.0, "roas_end": 0.0, "roas_target": 0.0, "roas_achieved": true/false,
+    "acos_start": 0.0, "acos_end": 0.0, "acos_target": 0.0, "acos_achieved": true/false,
+    "revenue_change_pct": 0.0
+  }},
+  "success_criteria_results": [
+    {{"criterion": "...", "met": true/false, "detail": "..."}}
+  ],
+  "what_worked": ["iyi giden 1", "iyi giden 2"],
+  "what_failed": ["kötü giden 1"],
+  "lessons_learned": ["öğrenilen 1", "öğrenilen 2"],
+  "next_strategy_hints": {{
+    "recommended_action": "ne yapmalı",
+    "suggested_budget": 0.0,
+    "focus_area": "bütçe|listing|timing|targeting",
+    "context_for_next_ai": "bir sonraki AI çağrısına taşınacak kritik bağlam"
+  }},
+  "verdict_reasoning": "kapsamlı değerlendirme"
+}}
+</task>"""
+
+        response = await self.client.messages.create(
+            model=self.model,
+            max_tokens=1800,
+            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        text = response.content[0].text
+        try:
+            result_json = json.loads(text)
+        except json.JSONDecodeError:
+            import re
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            result_json = json.loads(match.group()) if match else {"raw": text}
+
+        usage = response.usage
+        return AnalysisResult(
+            provider="claude", model=self.model, insight_type="strategy_verdict",
+            result_json=result_json, summary_text=result_json.get("outcome_summary", ""),
+            prompt_tokens=usage.input_tokens, completion_tokens=usage.output_tokens,
+            cache_hit=getattr(usage, "cache_read_input_tokens", 0) > 0,
+        )

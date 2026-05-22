@@ -37,3 +37,36 @@ class LLMProvider(ABC):
     async def generate_budget_recommendation(self, products: list[dict], total_budget: float) -> AnalysisResult:
         """Portföy genelinde bütçe dağılımı önerisi yap."""
         ...
+
+    @abstractmethod
+    async def launch_strategy(
+        self,
+        recommendation: dict,
+        initial_metrics: dict,
+        seller_context: dict,
+        action_confirmed: str,
+    ) -> AnalysisResult:
+        """Satıcı aksiyonu aldı — hedef, takvim ve başarı kriterleri belirle."""
+        ...
+
+    @abstractmethod
+    async def monitor_strategy(
+        self,
+        strategy: dict,
+        checkpoints: list[dict],
+        current_metrics: dict,
+        days_elapsed: int,
+        days_remaining: int,
+    ) -> AnalysisResult:
+        """Strateji takip noktası — hedefe gidişatı değerlendir, rota düzelt."""
+        ...
+
+    @abstractmethod
+    async def verdict_strategy(
+        self,
+        strategy: dict,
+        checkpoints: list[dict],
+        final_metrics: dict,
+    ) -> AnalysisResult:
+        """Süre doldu — hedefe ulaşıldı mı? Karar ver, öğrenilenleri kaydet."""
+        ...

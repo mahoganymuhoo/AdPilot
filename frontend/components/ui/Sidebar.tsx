@@ -1,13 +1,14 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart2, TrendingUp, Lightbulb, Settings, Package, Upload, BookOpen } from "lucide-react";
+import { BarChart2, TrendingUp, Lightbulb, Settings, Package, Upload, BookOpen, Target } from "lucide-react";
 import clsx from "clsx";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: BarChart2 },
   { href: "/products", label: "Ürünler", icon: Package },
   { href: "/insights", label: "AI Öneriler", icon: Lightbulb },
+  { href: "/strategies", label: "Stratejiler", icon: Target },
   { href: "/upload", label: "Veri Yükle", icon: Upload },
   { href: "/guide", label: "Nasıl Çalışır?", icon: BookOpen },
   { href: "/settings", label: "Ayarlar", icon: Settings },
