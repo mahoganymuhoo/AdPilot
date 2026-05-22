@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, text
 from datetime import datetime, timezone, timedelta
 from app.core.database import get_db
 from app.models.ad_metrics import AdMetric
 from app.models.product import Product
 from app.services.analytics import (
-    calculate_profitability, analyze_trend, detect_anomaly, calculate_ad_worthiness
+    calculate_profitability, analyze_trend, detect_anomaly, calculate_ad_worthiness,
+    calculate_dayparting,
 )
 from app.services.data_import import parse_etsy_stats_csv, parse_manual_entries
 from app.schemas.metrics import ManualMetricEntry, MetricsRead, ProfitabilityResponse
@@ -203,3 +204,76 @@ async def get_product_profitability(
         trend=trend.trend,
         anomalies=anomalies,
     )
+
+
+@router.get("/product/{product_id}/dayparting")
+async def get_dayparting(
+    product_id: int,
+    days: int = 90,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Saat × gün ısı haritası verisi.
+    En verimli reklam zamanlarını ROAS ve CTR bazında gösterir.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # PostgreSQL EXTRACT ile saatlik/günlük aggregation
+    result = await db.execute(
+        text("""
+            SELECT
+                EXTRACT(hour FROM time AT TIME ZONE 'UTC')::int AS hour,
+                EXTRACT(isodow FROM time AT TIME ZONE 'UTC')::int - 1 AS dow,
+                AVG(CASE WHEN impressions > 0 THEN clicks::float / impressions ELSE 0 END) AS ctr,
+                AVG(CASE WHEN ad_spend > 0 THEN revenue / ad_spend ELSE 0 END) AS roas,
+                AVG(ad_spend) AS ad_spend,
+                COUNT(*) AS data_points
+            FROM ad_metrics
+            WHERE product_id = :pid AND time >= :since
+              AND ad_spend > 0
+            GROUP BY hour, dow
+            ORDER BY hour, dow
+        """),
+        {"pid": product_id, "since": since},
+    )
+    rows = result.mappings().all()
+
+    metrics_with_time = [
+        {
+            "hour": row["hour"],
+            "dow": row["dow"],
+            "ctr": float(row["ctr"] or 0),
+            "roas": float(row["roas"] or 0),
+            "ad_spend": float(row["ad_spend"] or 0),
+        }
+        for row in rows
+    ]
+
+    dp = calculate_dayparting(metrics_with_time)
+
+    return {
+        "product_id": product_id,
+        "period_days": days,
+        "data_points": len(rows),
+        "cells": [
+            {
+                "hour": c.hour,
+                "dow": c.dow,
+                "avg_ctr": c.avg_ctr,
+                "avg_roas": c.avg_roas,
+                "avg_spend": c.avg_spend,
+                "n": c.data_points,
+            }
+            for c in dp.cells
+        ],
+        "best_hours": dp.best_hours,
+        "best_days": dp.best_days,
+        "worst_hours": dp.worst_hours,
+        "peak_cell": {
+            "hour": dp.peak_cell.hour,
+            "dow": dp.peak_cell.dow,
+            "avg_roas": dp.peak_cell.avg_roas,
+        } if dp.peak_cell else None,
+        "recommendation": dp.recommendation,
+        "dow_labels": dp.dow_labels,
+    }

@@ -9,6 +9,7 @@ Temel analitik algoritmalar:
 - Break-even Stress Test (senaryo matrisi)
 - Listing Kalite Skoru (CTR / kategori benchmark)
 - Ürün Yaşam Döngüsü (launch/growth/mature/declining)
+- Dayparting Analizi (saat/gün ısı haritası)
 - Attribution modeli
 """
 from __future__ import annotations
@@ -908,6 +909,112 @@ def project_strategy_outcome(
         velocity=round(velocity, 2),
         warning=warning,
         confidence=confidence,
+    )
+
+
+# ─── Dayparting Analizi ──────────────────────────────────────────────────────
+
+@dataclass
+class DaypartingCell:
+    hour: int       # 0-23
+    dow: int        # 0=Pazartesi … 6=Pazar
+    avg_ctr: float
+    avg_roas: float
+    avg_spend: float
+    data_points: int
+
+
+@dataclass
+class DaypartingResult:
+    cells: list[DaypartingCell]        # Tüm (saat, gün) çiftleri
+    best_hours: list[int]              # ROAS'a göre en iyi 3 saat
+    best_days: list[int]               # ROAS'a göre en iyi 2 gün
+    worst_hours: list[int]             # ROAS'a göre en kötü 3 saat
+    peak_cell: DaypartingCell | None   # Tek en iyi slot
+    recommendation: str
+    dow_labels: list[str]              # ["Pzt", "Sal", ...]
+
+
+_DOW_LABELS = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"]
+
+
+def calculate_dayparting(
+    metrics_with_time: list[dict],
+    # [{"hour": 14, "dow": 0, "ctr": 0.02, "roas": 3.5, "ad_spend": 5.0}, ...]
+) -> DaypartingResult:
+    """
+    Saatlik/günlük CTR ve ROAS aggregation.
+    En verimli reklam zamanlarını tespit eder.
+
+    metrics_with_time: DB'den GROUP BY EXTRACT(hour), EXTRACT(dow) ile gelen veriler.
+    """
+    # (hour, dow) → liste akümülatörü
+    acc: dict[tuple[int, int], list[dict]] = {}
+    for row in metrics_with_time:
+        key = (row["hour"], row["dow"])
+        acc.setdefault(key, []).append(row)
+
+    cells: list[DaypartingCell] = []
+    for (hour, dow), rows in acc.items():
+        n = len(rows)
+        avg_ctr = sum(r.get("ctr", 0) for r in rows) / n
+        avg_roas = sum(r.get("roas", 0) for r in rows) / n
+        avg_spend = sum(r.get("ad_spend", 0) for r in rows) / n
+        cells.append(DaypartingCell(
+            hour=hour, dow=dow,
+            avg_ctr=round(avg_ctr, 4),
+            avg_roas=round(avg_roas, 3),
+            avg_spend=round(avg_spend, 2),
+            data_points=n,
+        ))
+
+    if not cells:
+        return DaypartingResult(
+            cells=[], best_hours=[], best_days=[], worst_hours=[],
+            peak_cell=None, recommendation="Yeterli veri yok.",
+            dow_labels=_DOW_LABELS,
+        )
+
+    # En iyi/kötü saatler (ROAS ortalaması, saat bazında)
+    hour_roas: dict[int, list[float]] = {}
+    for c in cells:
+        hour_roas.setdefault(c.hour, []).append(c.avg_roas)
+    hour_avg = {h: sum(v) / len(v) for h, v in hour_roas.items()}
+    sorted_hours = sorted(hour_avg, key=lambda h: hour_avg[h], reverse=True)
+    best_hours = sorted_hours[:3]
+    worst_hours = sorted_hours[-3:]
+
+    # En iyi günler (gün bazında ROAS)
+    dow_roas: dict[int, list[float]] = {}
+    for c in cells:
+        dow_roas.setdefault(c.dow, []).append(c.avg_roas)
+    dow_avg = {d: sum(v) / len(v) for d, v in dow_roas.items()}
+    sorted_days = sorted(dow_avg, key=lambda d: dow_avg[d], reverse=True)
+    best_days = sorted_days[:2]
+
+    # En iyi tek slot
+    peak_cell = max(cells, key=lambda c: c.avg_roas) if cells else None
+
+    # Öneri metni
+    best_h_str = ", ".join(f"{h:02d}:00" for h in best_hours)
+    best_d_str = ", ".join(_DOW_LABELS[d] for d in best_days if d < 7)
+    if peak_cell:
+        recommendation = (
+            f"En verimli saatler: {best_h_str}. "
+            f"En iyi günler: {best_d_str}. "
+            f"Reklamlarını bu aralıklara yoğunlaştır, düşük ROAS'lı saatlerde bütçeyi kıs."
+        )
+    else:
+        recommendation = "Yeterli veri toplanmadı. 14 gün daha bekle."
+
+    return DaypartingResult(
+        cells=cells,
+        best_hours=best_hours,
+        best_days=best_days,
+        worst_hours=worst_hours,
+        peak_cell=peak_cell,
+        recommendation=recommendation,
+        dow_labels=_DOW_LABELS,
     )
 
 

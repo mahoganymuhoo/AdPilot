@@ -5,8 +5,10 @@ import RoasChart from "@/components/charts/RoasChart";
 import SpendRevenueChart from "@/components/charts/SpendRevenueChart";
 import InsightPanel from "@/components/ai-panel/InsightPanel";
 import InfoModal from "@/components/ui/InfoModal";
-import { AlertTriangle, HelpCircle } from "lucide-react";
+import DateRangePicker, { DateRange } from "@/components/ui/DateRangePicker";
+import { AlertTriangle, HelpCircle, Download } from "lucide-react";
 import { EXPLAINERS } from "@/lib/explainers";
+import { exportDashboardMetrics } from "@/lib/export";
 
 const DEMO_CHART_DATA = [
   { date: "01/05", roas: 2.1, ema7: 2.0, ema30: 1.9, ad_spend: 12, revenue: 25 },
@@ -34,14 +36,28 @@ const DEMO_INSIGHT = {
 };
 
 export default function DashboardPage() {
+  const [days, setDays] = useState<DateRange>(30);
+
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Son 30 günlük reklam performansı — metriklerin yanındaki{" "}
-          <HelpCircle size={12} className="inline text-gray-400" /> ikonuna tıklayarak ne anlama geldiğini öğren.
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Reklam performansı — metriklerin yanındaki{" "}
+            <HelpCircle size={12} className="inline text-gray-400" /> ikonuna tıklayarak ne anlama geldiğini öğren.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <DateRangePicker value={days} onChange={setDays} />
+          <button
+            onClick={() => exportDashboardMetrics(DEMO_CHART_DATA, days)}
+            title="CSV olarak indir"
+            className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors"
+          >
+            <Download size={15} />
+          </button>
+        </div>
       </div>
 
       {/* KPI Kartları */}
@@ -52,7 +68,7 @@ export default function DashboardPage() {
           subtitle="Hedef: 3.0x ✓"
           trend="improving"
           status="good"
-          badge="Son 30g"
+          badge={`Son ${days}g`}
           explainer={EXPLAINERS.roas}
         />
         <KpiCard

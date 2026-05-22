@@ -1,6 +1,6 @@
 import json
 from openai import AsyncOpenAI
-from app.services.llm.base import LLMProvider, AnalysisResult
+from app.services.llm.base import LLMProvider, AnalysisResult, ToolExecutor
 from app.core.config import settings
 
 SYSTEM_PROMPT = """You are AdPilot's senior e-commerce advertising analyst.
@@ -239,5 +239,34 @@ Return JSON:
         return AnalysisResult(
             provider="openai", model=self.model, insight_type="strategy_verdict",
             result_json=result_json, summary_text=result_json.get("outcome_summary", ""),
+            prompt_tokens=pt, completion_tokens=ct,
+        )
+
+    async def analyze_with_tools(
+        self,
+        question: str,
+        seller_context: dict,
+        tool_executor: ToolExecutor,
+    ) -> AnalysisResult:
+        # OpenAI function calling implementasyonu — temel sorgu, tool loop yok
+        prompt = f"""Seller context:
+{json.dumps(seller_context, ensure_ascii=False, indent=2)}
+
+Question: {question}
+
+Provide a comprehensive data-driven analysis. Return JSON:
+{{
+  "summary": "one paragraph summary",
+  "findings": ["finding 1", "finding 2"],
+  "recommendation": "main recommendation",
+  "actions": [{{"action": "...", "priority": "high|medium|low", "timeline": "..."}}],
+  "watch_metrics": [{{"metric": "...", "threshold": "...", "reason": "..."}}],
+  "confidence": "low|medium|high",
+  "tools_used": []
+}}"""
+        result_json, pt, ct = await self._call(prompt, max_tokens=1500)
+        return AnalysisResult(
+            provider="openai", model=self.model, insight_type="deep_analysis",
+            result_json=result_json, summary_text=result_json.get("summary", ""),
             prompt_tokens=pt, completion_tokens=ct,
         )

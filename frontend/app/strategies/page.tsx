@@ -1,9 +1,13 @@
 "use client";
 import { useState } from "react";
-import { Target, CheckCircle, Clock, AlertTriangle, XCircle, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Target, CheckCircle, Clock, AlertTriangle, XCircle, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus, GitCompare, Download } from "lucide-react";
 import clsx from "clsx";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from "recharts";
 import { useStrategies, useStrategy } from "@/lib/hooks";
 import { PageLoader, PageError, EmptyState } from "@/components/ui/PageStates";
+import { exportStrategyCheckpoints } from "@/lib/export";
 
 // ---- Demo veri (backend bağlanana kadar fallback) ----
 const DEMO_STRATEGIES = [
@@ -116,6 +120,8 @@ const opTypeLabels: Record<string, string> = {
 
 export default function StrategiesPage() {
   const [selected, setSelected] = useState<number>(1);
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareWith, setCompareWith] = useState<number | null>(null);
   const { data: apiData, error: apiError, isLoading } = useStrategies();
 
   // API'den veri geldiyse kullan, gelmediyse demo
@@ -124,6 +130,7 @@ export default function StrategiesPage() {
     : DEMO_STRATEGIES;
 
   const strategy = strategies.find((s: any) => s.id === selected) ?? strategies[0];
+  const compareStrategy = compareWith ? strategies.find((s: any) => s.id === compareWith) : null;
   const statusCfg = statusConfig[(strategy?.status as keyof typeof statusConfig) ?? "active"];
   const StatusIcon = statusCfg.icon;
 
@@ -131,15 +138,68 @@ export default function StrategiesPage() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Strateji Takibi</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          AI önerisi → Aksiyon → Takip → Sonuç. Her strateji DB'ye kaydedilir, sonraki kararlara beslenir.
-        </p>
-        {apiError && (
-          <p className="text-xs text-amber-600 mt-1">⚠ Backend bağlantısı yok — demo veri gösteriliyor</p>
-        )}
+      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Strateji Takibi</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            AI önerisi → Aksiyon → Takip → Sonuç. Her strateji DB'ye kaydedilir, sonraki kararlara beslenir.
+          </p>
+          {apiError && (
+            <p className="text-xs text-amber-600 mt-1">⚠ Backend bağlantısı yok — demo veri gösteriliyor</p>
+          )}
+        </div>
+        <button
+          onClick={() => { setCompareMode((p) => !p); setCompareWith(null); }}
+          className={clsx(
+            "flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors",
+            compareMode
+              ? "bg-blue-600 text-white border-blue-600"
+              : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+          )}
+        >
+          <GitCompare size={14} />
+          {compareMode ? "Karşılaştırmadan Çık" : "Karşılaştır"}
+        </button>
       </div>
+
+      {/* Karşılaştırma görünümü */}
+      {compareMode && (
+        <div className="mb-6 bg-white rounded-xl border border-blue-200 p-5 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">İki Stratejiyi Karşılaştır</h3>
+          <div className="flex gap-4 mb-4 flex-wrap">
+            <div>
+              <p className="text-xs text-gray-500 mb-1">Birinci Strateji</p>
+              <select
+                value={selected}
+                onChange={(e) => setSelected(Number(e.target.value))}
+                className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700 bg-white"
+              >
+                {strategies.map((s: any) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-1">İkinci Strateji</p>
+              <select
+                value={compareWith ?? ""}
+                onChange={(e) => setCompareWith(e.target.value ? Number(e.target.value) : null)}
+                className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700 bg-white"
+              >
+                <option value="">Seç...</option>
+                {strategies.filter((s: any) => s.id !== selected).map((s: any) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {compareStrategy ? (
+            <CompareView a={strategy} b={compareStrategy} />
+          ) : (
+            <p className="text-sm text-gray-400 text-center py-4">İkinci stratejiyi seçin</p>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Sol: Strateji Listesi */}
@@ -212,13 +272,22 @@ export default function StrategiesPage() {
                   </span>
                 </div>
               </div>
-              <div className="text-right">
-                <p className="text-2xl font-bold text-gray-900">
-                  {strategy.checkpoints.length > 0
-                    ? `%${strategy.checkpoints[strategy.checkpoints.length - 1].progress_pct}`
-                    : "—"}
-                </p>
-                <p className="text-xs text-gray-400">hedefe ilerleme</p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => exportStrategyCheckpoints(strategy)}
+                  title="CSV olarak indir"
+                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <Download size={15} />
+                </button>
+                <div className="text-right">
+                  <p className="text-2xl font-bold text-gray-900">
+                    {strategy.checkpoints.length > 0
+                      ? `%${strategy.checkpoints[strategy.checkpoints.length - 1].progress_pct}`
+                      : "—"}
+                  </p>
+                  <p className="text-xs text-gray-400">hedefe ilerleme</p>
+                </div>
               </div>
             </div>
 
@@ -378,6 +447,88 @@ function CheckpointCard({ cp, idx, isLast }: { cp: any; idx: number; isLast: boo
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function CompareView({ a, b }: { a: any; b: any }) {
+  // Checkpoint verilerini çakışık çizgi grafik için birleştir
+  const chartData: Record<number, any>[] = [];
+  const maxLen = Math.max(a.checkpoints.length, b.checkpoints.length);
+
+  for (let i = 0; i < maxLen; i++) {
+    const cpA = a.checkpoints[i];
+    const cpB = b.checkpoints[i];
+    chartData.push({
+      cp: `CP ${i + 1}`,
+      [a.name]: cpA?.progress_pct ?? null,
+      [b.name]: cpB?.progress_pct ?? null,
+    });
+  }
+
+  const metrics = [
+    { label: "ROAS (Başlangıç)", aVal: `${a.initial_metrics.roas}x`, bVal: `${b.initial_metrics.roas}x` },
+    { label: "ROAS (Hedef)", aVal: `${a.target_metrics.roas}x`, bVal: `${b.target_metrics.roas}x` },
+    { label: "ACOS (Başlangıç)", aVal: `%${a.initial_metrics.acos}`, bVal: `%${b.initial_metrics.acos}` },
+    { label: "Checkpoint Sayısı", aVal: `${a.checkpoints.length}`, bVal: `${b.checkpoints.length}` },
+    {
+      label: "Son İlerleme",
+      aVal: a.checkpoints.length ? `%${a.checkpoints[a.checkpoints.length - 1].progress_pct}` : "—",
+      bVal: b.checkpoints.length ? `%${b.checkpoints[b.checkpoints.length - 1].progress_pct}` : "—",
+    },
+    { label: "Durum", aVal: statusConfig[a.status as keyof typeof statusConfig]?.label ?? a.status, bVal: statusConfig[b.status as keyof typeof statusConfig]?.label ?? b.status },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* İlerleme Eğrisi */}
+      {chartData.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">İlerleme Eğrisi (%)</p>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="cp" tick={{ fontSize: 11 }} />
+              <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v: any) => `${v}%`} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Line
+                type="monotone" dataKey={a.name} stroke="#3b82f6"
+                strokeWidth={2} dot={{ r: 4 }} connectNulls
+              />
+              <Line
+                type="monotone" dataKey={b.name} stroke="#f97316"
+                strokeWidth={2} dot={{ r: 4 }} strokeDasharray="5 5" connectNulls
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Metrik Karşılaştırma Tablosu */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Metrik Karşılaştırması</p>
+        <div className="border border-gray-100 rounded-xl overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="text-left px-3 py-2 text-gray-400 font-medium w-1/3">Metrik</th>
+                <th className="text-center px-3 py-2 text-blue-600 font-semibold">{a.name}</th>
+                <th className="text-center px-3 py-2 text-orange-500 font-semibold">{b.name}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metrics.map((m, i) => (
+                <tr key={m.label} className={i % 2 === 0 ? "bg-white" : "bg-gray-50/50"}>
+                  <td className="px-3 py-2 text-gray-500">{m.label}</td>
+                  <td className="px-3 py-2 text-center font-medium text-gray-800">{m.aVal}</td>
+                  <td className="px-3 py-2 text-center font-medium text-gray-800">{m.bVal}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

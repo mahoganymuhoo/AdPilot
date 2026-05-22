@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from datetime import datetime, timezone, timedelta
 from app.core.database import get_db
 from app.models.ad_metrics import AdMetric
@@ -432,3 +433,230 @@ async def get_profitability_ai(
         summary_text=result.summary_text, prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens, cache_hit=result.cache_hit,
     )
+
+
+class AskRequest(BaseModel):
+    question: str
+    seller_id: int = 1
+    product_id: int | None = None
+
+
+async def _build_tool_executor(seller_id: int, db: AsyncSession):
+    """
+    Claude'un tool çağrılarını gerçek DB sorgularına yönlendiren executor fabrikası.
+    Closure ile seller_id ve db session'ı yakalar.
+    """
+    async def execute(tool_name: str, tool_input: dict) -> dict:
+        if tool_name == "get_roas_trend":
+            pid = tool_input["product_id"]
+            days = tool_input.get("days", 30)
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            q = await db.execute(
+                select(AdMetric)
+                .where(AdMetric.product_id == pid, AdMetric.time >= since)
+                .order_by(AdMetric.time)
+            )
+            rows = q.scalars().all()
+            if not rows:
+                return {"error": "Veri bulunamadı", "product_id": pid}
+            data = [{"date": str(m.time.date()), "roas": round(m.roas or 0, 3)} for m in rows]
+            avg_roas = sum(d["roas"] for d in data) / len(data)
+            recent_avg = sum(d["roas"] for d in data[-7:]) / len(data[-7:]) if len(data) >= 7 else avg_roas
+            return {
+                "product_id": pid,
+                "days": days,
+                "data_points": len(data),
+                "avg_roas": round(avg_roas, 3),
+                "recent_7d_avg_roas": round(recent_avg, 3),
+                "trend": "improving" if recent_avg > avg_roas * 1.05 else "declining" if recent_avg < avg_roas * 0.95 else "stable",
+                "daily": data[-14:],  # son 14 gün detay
+            }
+
+        elif tool_name == "get_product_metrics":
+            pid = tool_input["product_id"]
+            since = datetime.now(timezone.utc) - timedelta(days=30)
+            q = await db.execute(
+                select(AdMetric).where(AdMetric.product_id == pid, AdMetric.time >= since)
+            )
+            rows = q.scalars().all()
+            pq = await db.execute(select(Product).where(Product.id == pid))
+            product = pq.scalar_one_or_none()
+            if not rows:
+                return {"error": "Veri bulunamadı", "product_id": pid}
+            revenue = sum(m.revenue for m in rows)
+            spend = sum(m.ad_spend for m in rows)
+            clicks = sum(m.clicks for m in rows)
+            impressions = sum(getattr(m, "impressions", 0) or 0 for m in rows)
+            conversions = sum(m.conversions for m in rows)
+            roas = revenue / spend if spend > 0 else 0
+            acos = spend / revenue * 100 if revenue > 0 else 0
+            ctr = clicks / impressions * 100 if impressions > 0 else 0
+            cogs = getattr(product, "cogs", None) or (revenue * 0.3)
+            price = getattr(product, "price", None) or (revenue / max(conversions, 1))
+            etsy_fee = price * 0.065 + 0.20
+            break_even_acos = ((price - cogs - etsy_fee) / price * 100) if price > 0 else 0
+            return {
+                "product_id": pid,
+                "title": getattr(product, "title", ""),
+                "period_days": 30,
+                "total_revenue": round(revenue, 2),
+                "total_ad_spend": round(spend, 2),
+                "total_conversions": conversions,
+                "roas": round(roas, 3),
+                "acos": round(acos, 2),
+                "ctr_pct": round(ctr, 3),
+                "cogs": round(cogs, 2),
+                "price": round(price, 2),
+                "break_even_acos": round(break_even_acos, 2),
+                "is_profitable": acos < break_even_acos if break_even_acos > 0 else None,
+            }
+
+        elif tool_name == "get_anomalies":
+            sid = tool_input.get("seller_id", seller_id)
+            since = datetime.now(timezone.utc) - timedelta(days=7)
+            from app.models.anomaly_log import AnomalyLog
+            try:
+                q = await db.execute(
+                    select(AnomalyLog)
+                    .where(AnomalyLog.seller_id == sid, AnomalyLog.detected_at >= since)
+                    .order_by(AnomalyLog.detected_at.desc())
+                    .limit(10)
+                )
+                anomalies = q.scalars().all()
+                return {
+                    "count": len(anomalies),
+                    "anomalies": [
+                        {
+                            "metric": a.metric,
+                            "z_score": round(a.z_score, 2),
+                            "severity": a.severity,
+                            "direction": a.direction,
+                            "detected_at": str(a.detected_at),
+                            "product_id": a.product_id,
+                        }
+                        for a in anomalies
+                    ],
+                }
+            except Exception:
+                return {"count": 0, "anomalies": [], "note": "Anomali tablosu henüz mevcut değil"}
+
+        elif tool_name == "get_budget_allocation":
+            sid = tool_input.get("seller_id", seller_id)
+            since = datetime.now(timezone.utc) - timedelta(days=7)
+            q = await db.execute(
+                select(
+                    AdMetric.product_id,
+                    func.sum(AdMetric.ad_spend).label("total_spend"),
+                    func.sum(AdMetric.revenue).label("total_revenue"),
+                    func.avg(AdMetric.roas).label("avg_roas"),
+                )
+                .join(Product, Product.id == AdMetric.product_id)
+                .where(Product.seller_id == sid, AdMetric.time >= since)
+                .group_by(AdMetric.product_id)
+                .order_by(func.sum(AdMetric.ad_spend).desc())
+            )
+            rows = q.all()
+            total_spend = sum(r.total_spend or 0 for r in rows)
+            return {
+                "seller_id": sid,
+                "period_days": 7,
+                "total_spend": round(total_spend, 2),
+                "allocations": [
+                    {
+                        "product_id": r.product_id,
+                        "spend": round(r.total_spend or 0, 2),
+                        "revenue": round(r.total_revenue or 0, 2),
+                        "avg_roas": round(r.avg_roas or 0, 3),
+                        "share_pct": round((r.total_spend or 0) / total_spend * 100, 1) if total_spend > 0 else 0,
+                    }
+                    for r in rows
+                ],
+            }
+
+        elif tool_name == "get_strategy_history":
+            sid = tool_input.get("seller_id", seller_id)
+            pid = tool_input.get("product_id")
+            from app.models.strategy import Strategy, StrategyOutcome
+            q_base = select(Strategy).where(Strategy.seller_id == sid, Strategy.status == "completed")
+            if pid:
+                q_base = q_base.where(Strategy.product_id == pid)
+            q = await db.execute(q_base.order_by(Strategy.created_at.desc()).limit(20))
+            strategies = q.scalars().all()
+            success = sum(1 for s in strategies if getattr(s, "outcome_summary", "") == "success")
+            return {
+                "total_strategies": len(strategies),
+                "success_count": success,
+                "success_rate_pct": round(success / len(strategies) * 100, 1) if strategies else 0,
+                "recent": [
+                    {
+                        "id": s.id,
+                        "operation_type": s.operation_type,
+                        "status": s.status,
+                        "timeline_days": s.timeline_days,
+                        "created_at": str(s.created_at),
+                    }
+                    for s in strategies[:5]
+                ],
+            }
+
+        return {"error": f"Bilinmeyen tool: {tool_name}"}
+
+    return execute
+
+
+@router.post("/ask")
+async def ask_with_tools(
+    body: AskRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Claude'un tool use ile kendi veri sorgulayarak soruyu yanıtlaması.
+
+    Claude hangi metriklere ihtiyaç duyduğuna kendisi karar verir,
+    tool'lar aracılığıyla DB'yi sorgular ve kapsamlı analiz üretir.
+    """
+    seller_q = await db.execute(select(Seller).where(Seller.id == body.seller_id))
+    seller = seller_q.scalar_one_or_none()
+    if not seller:
+        raise HTTPException(404, "Seller bulunamadı.")
+
+    seller_context = _seller_context(seller)
+    if body.product_id:
+        seller_context["product_id"] = body.product_id
+
+    provider = get_llm_provider(ai_provider=seller.ai_provider)
+    tool_executor = await _build_tool_executor(body.seller_id, db)
+
+    result = await provider.analyze_with_tools(
+        question=body.question,
+        seller_context=seller_context,
+        tool_executor=tool_executor,
+    )
+
+    insight = AIInsight(
+        product_id=body.product_id, seller_id=body.seller_id,
+        insight_type="deep_analysis", ai_provider=result.provider,
+        model_used=result.model, result_json=result.result_json,
+        summary_text=result.summary_text, prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens, cache_hit=int(result.cache_hit),
+    )
+    db.add(insight)
+    await db.commit()
+
+    return {
+        "question": body.question,
+        "provider": result.provider,
+        "model": result.model,
+        "summary": result.summary_text,
+        "findings": result.result_json.get("findings", []),
+        "recommendation": result.result_json.get("recommendation", ""),
+        "actions": result.result_json.get("actions", []),
+        "watch_metrics": result.result_json.get("watch_metrics", []),
+        "confidence": result.result_json.get("confidence", "medium"),
+        "tools_used": result.result_json.get("tools_used", []),
+        "tokens": {
+            "prompt": result.prompt_tokens,
+            "completion": result.completion_tokens,
+            "cache_hit": result.cache_hit,
+        },
+    }

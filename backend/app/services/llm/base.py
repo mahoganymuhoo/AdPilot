@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Awaitable
+
+ToolExecutor = Callable[[str, dict], Awaitable[dict]]
 
 
 @dataclass
@@ -69,4 +71,14 @@ class LLMProvider(ABC):
         final_metrics: dict,
     ) -> AnalysisResult:
         """Süre doldu — hedefe ulaşıldı mı? Karar ver, öğrenilenleri kaydet."""
+        ...
+
+    @abstractmethod
+    async def analyze_with_tools(
+        self,
+        question: str,
+        seller_context: dict,
+        tool_executor: ToolExecutor,
+    ) -> AnalysisResult:
+        """Claude'un tool'larla kendi veri sorgulayarak derin analiz yapması."""
         ...

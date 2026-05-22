@@ -1,6 +1,7 @@
 import json
 import anthropic
 from app.services.llm.base import LLMProvider, AnalysisResult
+from app.services.llm.tools import TOOLS, ToolExecutor
 from app.core.config import settings
 
 SYSTEM_PROMPT = """Sen AdPilot'un kıdemli e-ticaret reklam analistisin.
@@ -451,4 +452,139 @@ JSON formatında döndür:
             result_json=result_json, summary_text=result_json.get("outcome_summary", ""),
             prompt_tokens=usage.input_tokens, completion_tokens=usage.output_tokens,
             cache_hit=getattr(usage, "cache_read_input_tokens", 0) > 0,
+        )
+
+    async def analyze_with_tools(
+        self,
+        question: str,
+        seller_context: dict,
+        tool_executor: ToolExecutor,
+    ) -> AnalysisResult:
+        """
+        Claude'un kendi veri sorgulayarak derin analiz yapmasını sağlar.
+
+        Claude, yanıtını oluşturmak için ihtiyaç duyduğu metrikleri,
+        trendleri ve anomalileri tool çağrılarıyla kendi sorgular.
+        Tool sonuçları DB'den gerçek zamanlı olarak çekilir.
+
+        tool_executor: async (tool_name, tool_input) -> dict
+        """
+        messages: list[dict] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"<seller_context>\n{json.dumps(seller_context, ensure_ascii=False, indent=2)}\n</seller_context>",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            f"<question>\n{question}\n</question>\n\n"
+                            "<task>\n"
+                            "Satıcının sorusunu yanıtla. İhtiyaç duyduğun metrikleri ve trend verilerini "
+                            "tool'lar aracılığıyla sorgula. Tüm verileri topladıktan sonra kapsamlı, "
+                            "veri odaklı bir analiz yaz.\n"
+                            "Yanıtın şu bölümleri içersin:\n"
+                            "1. Mevcut durum özeti (verilerden)\n"
+                            "2. Teşhis ve önemli bulgular\n"
+                            "3. Somut aksiyon önerisi (ne yapılmalı, ne kadar, ne zaman)\n"
+                            "4. İzlenecek metrikler ve uyarı eşikleri\n\n"
+                            "Son yanıtını JSON formatında ver:\n"
+                            "{\n"
+                            '  "summary": "tek paragraf özet",\n'
+                            '  "findings": ["bulgu 1", "bulgu 2"],\n'
+                            '  "recommendation": "ana öneri",\n'
+                            '  "actions": [{"action": "...", "priority": "high|medium|low", "timeline": "..."}],\n'
+                            '  "watch_metrics": [{"metric": "...", "threshold": "...", "reason": "..."}],\n'
+                            '  "confidence": "low|medium|high",\n'
+                            '  "tools_used": ["kullanılan tool isimleri"]\n'
+                            "}\n"
+                            "</task>"
+                        ),
+                    },
+                ],
+            }
+        ]
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        cache_hit = False
+        tools_used: list[str] = []
+
+        # Tool use loop — Claude araç çağırırken döngü devam eder
+        while True:
+            response = await self.client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                tools=TOOLS,
+                messages=messages,
+            )
+
+            usage = response.usage
+            total_input_tokens += usage.input_tokens
+            total_output_tokens += usage.output_tokens
+            if getattr(usage, "cache_read_input_tokens", 0) > 0:
+                cache_hit = True
+
+            # Claude tool_use bloku yoksa yanıt hazır
+            if response.stop_reason == "end_turn":
+                break
+
+            # Tool çağrılarını işle
+            tool_calls = [b for b in response.content if b.type == "tool_use"]
+            if not tool_calls:
+                break
+
+            # Assistant mesajını geçmişe ekle
+            messages.append({"role": "assistant", "content": response.content})
+
+            # Her tool çağrısını çalıştır ve sonuçları topla
+            tool_results = []
+            for tool_call in tool_calls:
+                tool_name = tool_call.name
+                tool_input = tool_call.input
+                if tool_name not in tools_used:
+                    tools_used.append(tool_name)
+
+                try:
+                    result = await tool_executor(tool_name, tool_input)
+                except Exception as e:
+                    result = {"error": str(e), "tool": tool_name}
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_call.id,
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                })
+
+            messages.append({"role": "user", "content": tool_results})
+
+        # Son yanıtı parse et
+        final_text = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                final_text = block.text
+                break
+
+        try:
+            result_json = json.loads(final_text)
+        except json.JSONDecodeError:
+            import re
+            match = re.search(r"\{.*\}", final_text, re.DOTALL)
+            result_json = json.loads(match.group()) if match else {"raw": final_text}
+
+        result_json["tools_used"] = tools_used
+
+        return AnalysisResult(
+            provider="claude",
+            model=self.model,
+            insight_type="deep_analysis",
+            result_json=result_json,
+            summary_text=result_json.get("summary", ""),
+            prompt_tokens=total_input_tokens,
+            completion_tokens=total_output_tokens,
+            cache_hit=cache_hit,
         )
