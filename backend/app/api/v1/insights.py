@@ -13,6 +13,7 @@ from app.services.analytics import (
     calculate_saturation_curve, stress_test_breakeven,
     calculate_listing_quality, detect_product_lifecycle,
 )
+from app.services.ml.lstm_anomaly import detect_anomalies
 from app.services.llm import get_llm_provider
 from app.schemas.insights import InsightResponse, AdWorthinessResponse, BudgetRecommendationResponse
 
@@ -659,4 +660,66 @@ async def ask_with_tools(
             "completion": result.completion_tokens,
             "cache_hit": result.cache_hit,
         },
+    }
+
+
+@router.get("/product/{product_id}/anomaly-detection")
+async def get_anomaly_detection(
+    product_id: int,
+    metric: str = "roas",       # roas | acos | ctr
+    days: int = 90,
+    threshold: float = 2.5,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Hibrit anomali tespiti: veri azsa Z-score, yeterliyse LSTM.
+
+    metric: hangi metrik üzerinde anomali aranacak (roas/acos/ctr)
+    days: kaç günlük veri kullanılacak
+    threshold: anomali eşiği (sigma cinsinden, varsayılan 2.5)
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    q = await db.execute(
+        select(AdMetric)
+        .where(AdMetric.product_id == product_id, AdMetric.time >= since)
+        .order_by(AdMetric.time)
+    )
+    rows = q.scalars().all()
+
+    if not rows:
+        raise HTTPException(404, "Veri bulunamadı.")
+
+    metric_map = {
+        "roas": lambda m: m.roas or 0.0,
+        "acos": lambda m: m.acos or 0.0,
+        "ctr": lambda m: m.ctr or 0.0,
+    }
+    getter = metric_map.get(metric, metric_map["roas"])
+    values = [getter(m) for m in rows]
+    dates = [str(m.time.date()) for m in rows]
+
+    result = detect_anomalies(values, threshold=threshold)
+
+    return {
+        "product_id": product_id,
+        "metric": metric,
+        "period_days": days,
+        "series_length": result.series_length,
+        "method_used": result.method_used,
+        "threshold": threshold,
+        "anomaly_count": result.anomaly_count,
+        "summary": result.summary,
+        "anomalies": [
+            {
+                "date": dates[a.index] if a.index < len(dates) else None,
+                "index": a.index,
+                "value": round(a.value, 3),
+                "score": round(a.score, 3),
+                "severity": a.severity,
+                "direction": a.direction,
+                "z_score": a.z_score,
+                "lstm_error": a.lstm_error,
+            }
+            for a in result.anomalies
+        ],
     }
