@@ -69,6 +69,9 @@ export const api = {
 
   getStrategyContext: (strategyId: number) =>
     req<StrategyContext>(`/strategies/${strategyId}/context`),
+
+  getImpactAnalysis: (sellerId: number) =>
+    req<ImpactAnalysis>(`/strategies/impact-analysis?seller_id=${sellerId}`),
 };
 
 // ---- Types ----
@@ -264,4 +267,29 @@ export interface StrategyContext {
   lessons_learned: string[];
   next_strategy_hints: Record<string, unknown>;
   context_for_next_ai: string | null;
+}
+
+export interface ImpactStrategyRow {
+  strategy_id: number;
+  name: string;
+  operation_type: string;
+  outcome: string;
+  impact_score: number;
+  ai_confidence: string;
+  actual_roas_change_pct: number;
+  predicted_roas_change_pct: number;
+  completed_at: string | null;
+}
+
+export interface ImpactAnalysis {
+  seller_id: number;
+  total_scored: number;
+  overall_impact_score: number | null;
+  calibration: {
+    total_scored: number;
+    accuracy_pct: number;
+    high_confidence_accuracy_pct: number;
+  };
+  by_operation_type: Record<string, { count: number; avg_impact: number }>;
+  per_strategy: ImpactStrategyRow[];
 }

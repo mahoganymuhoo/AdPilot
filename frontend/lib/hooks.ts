@@ -32,3 +32,7 @@ export function useAnomalies(unread = false) {
     refreshInterval: 120_000,
   });
 }
+
+export function useImpactAnalysis() {
+  return useSWR("impact-analysis", () => api.getImpactAnalysis(SELLER_ID));
+}

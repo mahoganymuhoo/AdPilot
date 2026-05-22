@@ -31,8 +31,15 @@ class ClaudeProvider(LLMProvider):
         )
         self.model = settings.CLAUDE_MODEL
 
+    @staticmethod
+    def _pop_memory_block(seller_context: dict) -> str:
+        """seller_context'ten seller_memory_block'u çıkar ve döndür."""
+        return seller_context.pop("seller_memory_block", "") or ""
+
     async def analyze_profitability(self, metrics: dict, seller_context: dict) -> AnalysisResult:
-        prompt = f"""<seller_context>
+        memory_block = self._pop_memory_block(seller_context)
+        memory_section = f"\n{memory_block}\n" if memory_block else ""
+        prompt = f"""{memory_section}<seller_context>
 {json.dumps(seller_context, ensure_ascii=False, indent=2)}
 </seller_context>
 
@@ -92,7 +99,9 @@ Karlılık analizi yap. Şu formatta JSON döndür:
         )
 
     async def score_ad_worthiness(self, product_metrics: dict, seller_context: dict) -> AnalysisResult:
-        prompt = f"""<seller_context>
+        memory_block = self._pop_memory_block(seller_context)
+        memory_section = f"\n{memory_block}\n" if memory_block else ""
+        prompt = f"""{memory_section}<seller_context>
 {json.dumps(seller_context, ensure_ascii=False, indent=2)}
 </seller_context>
 

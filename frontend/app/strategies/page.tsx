@@ -1,13 +1,14 @@
 "use client";
 import { useState } from "react";
-import { Target, CheckCircle, Clock, AlertTriangle, XCircle, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus, GitCompare, Download } from "lucide-react";
+import { Target, CheckCircle, Clock, AlertTriangle, XCircle, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus, GitCompare, Download, Brain, Zap } from "lucide-react";
 import clsx from "clsx";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
-import { useStrategies, useStrategy } from "@/lib/hooks";
+import { useStrategies, useStrategy, useImpactAnalysis } from "@/lib/hooks";
 import { PageLoader, PageError, EmptyState } from "@/components/ui/PageStates";
 import { exportStrategyCheckpoints } from "@/lib/export";
+import type { ImpactAnalysis } from "@/lib/api";
 
 // ---- Demo veri (backend bağlanana kadar fallback) ----
 const DEMO_STRATEGIES = [
@@ -123,6 +124,7 @@ export default function StrategiesPage() {
   const [compareMode, setCompareMode] = useState(false);
   const [compareWith, setCompareWith] = useState<number | null>(null);
   const { data: apiData, error: apiError, isLoading } = useStrategies();
+  const { data: impactData } = useImpactAnalysis();
 
   // API'den veri geldiyse kullan, gelmediyse demo
   const strategies = (apiData?.strategies && apiData.strategies.length > 0)
@@ -254,6 +256,9 @@ export default function StrategiesPage() {
           <button className="w-full bg-gray-900 text-white rounded-xl py-3 text-sm font-medium hover:bg-gray-700 transition-colors">
             + Yeni Strateji Başlat
           </button>
+
+          {/* AI Etki Analizi */}
+          <ImpactPanel data={impactData ?? null} />
         </div>
 
         {/* Sağ: Detay */}
@@ -530,6 +535,69 @@ function CompareView({ a, b }: { a: any; b: any }) {
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ImpactPanel({ data }: { data: ImpactAnalysis | null }) {
+  if (!data || data.total_scored === 0) return null;
+
+  const scoreColor = (s: number) =>
+    s >= 0.7 ? "text-green-600" : s >= 0.4 ? "text-yellow-600" : "text-red-600";
+
+  const outcomeColors: Record<string, string> = {
+    success: "bg-green-100 text-green-700",
+    partial: "bg-yellow-100 text-yellow-700",
+    failed: "bg-red-100 text-red-700",
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-purple-100 p-4 shadow-sm">
+      <div className="flex items-center gap-2 mb-3">
+        <Brain size={14} className="text-purple-500" />
+        <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wide">AI İsabet Analizi</h3>
+      </div>
+
+      {/* Genel skor */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs text-gray-500">Genel etki skoru</span>
+        <span className={clsx("text-lg font-bold", scoreColor(data.overall_impact_score ?? 0))}>
+          {data.overall_impact_score !== null ? (data.overall_impact_score * 100).toFixed(0) : "—"}/100
+        </span>
+      </div>
+
+      {/* Kalibrasyon */}
+      {data.calibration.total_scored >= 2 && (
+        <div className="bg-purple-50 rounded-lg px-3 py-2 mb-3 border border-purple-100">
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-purple-700">Genel isabet</span>
+            <span className="font-semibold text-purple-800">%{data.calibration.accuracy_pct}</span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-purple-700">Yüksek güven isabeti</span>
+            <span className="font-semibold text-purple-800">%{data.calibration.high_confidence_accuracy_pct}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Son stratejiler */}
+      <div className="space-y-1.5">
+        {data.per_strategy.slice(0, 4).map((s) => (
+          <div key={s.strategy_id} className="flex items-center justify-between text-xs">
+            <span className="text-gray-600 truncate max-w-[120px]">{s.name}</span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className={clsx("px-1.5 py-0.5 rounded text-[10px] font-medium", outcomeColors[s.outcome] ?? "bg-gray-100 text-gray-600")}>
+                {s.outcome === "success" ? "✓" : s.outcome === "partial" ? "~" : "✗"}
+              </span>
+              <span className={clsx("font-semibold", scoreColor(s.impact_score))}>
+                {(s.impact_score * 100).toFixed(0)}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[10px] text-gray-400 mt-3 text-center">{data.total_scored} değerlendirme</p>
     </div>
   );
 }

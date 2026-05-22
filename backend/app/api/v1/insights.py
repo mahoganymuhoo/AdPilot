@@ -15,6 +15,7 @@ from app.services.analytics import (
 )
 from app.services.ml.lstm_anomaly import detect_anomalies
 from app.services.llm import get_llm_provider
+from app.services.strategy_memory import StrategyMemory
 from app.schemas.insights import InsightResponse, AdWorthinessResponse, BudgetRecommendationResponse
 
 router = APIRouter(prefix="/insights", tags=["insights"])
@@ -86,7 +87,11 @@ async def get_ad_worthiness(
             ai_provider=seller.ai_provider,
             api_key=seller.anthropic_api_key_enc or seller.openai_api_key_enc,
         )
-        ai_result = await provider.score_ad_worthiness(product_metrics, _seller_context(seller))
+        seller_ctx = _seller_context(seller)
+        memory = await StrategyMemory.build(seller_id=seller_id, db=db)
+        if not memory.is_empty():
+            seller_ctx["seller_memory_block"] = memory.to_prompt_block()
+        ai_result = await provider.score_ad_worthiness(product_metrics, seller_ctx)
         ai_analysis = ai_result.result_json
 
         insight = AIInsight(
@@ -414,7 +419,11 @@ async def get_profitability_ai(
     }
 
     provider = get_llm_provider(ai_provider=seller.ai_provider)
-    result = await provider.analyze_profitability(metrics_payload, _seller_context(seller))
+    seller_ctx = _seller_context(seller)
+    memory = await StrategyMemory.build(seller_id=seller_id, db=db)
+    if not memory.is_empty():
+        seller_ctx["seller_memory_block"] = memory.to_prompt_block()
+    result = await provider.analyze_profitability(metrics_payload, seller_ctx)
 
     insight = AIInsight(
         product_id=product_id, seller_id=seller_id,

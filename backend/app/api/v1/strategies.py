@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.models.strategy import Strategy, StrategyCheckpoint, StrategyOutcome
 from app.services.llm.factory import get_llm_provider
 from app.services.analytics import project_strategy_outcome
+from app.services.strategy_memory import StrategyMemory
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
@@ -52,6 +53,9 @@ async def launch_strategy(req: LaunchStrategyRequest, db: AsyncSession = Depends
     timeline_days = r.get("timeline_days", 14)
     target_date = datetime.utcnow() + timedelta(days=timeline_days)
 
+    confidence_map = {"low": 0.33, "medium": 0.66, "high": 1.0}
+    confidence_score = confidence_map.get(r.get("confidence", "medium"), 0.66)
+
     strategy = Strategy(
         seller_id=req.seller_id,
         product_id=req.product_id,
@@ -63,6 +67,7 @@ async def launch_strategy(req: LaunchStrategyRequest, db: AsyncSession = Depends
         target_metrics=r.get("target_metrics", {}),
         ai_launch_analysis=r,
         check_interval_days=r.get("check_interval_days", 3),
+        ai_confidence_score=confidence_score,
     )
     db.add(strategy)
     await db.commit()
@@ -335,6 +340,14 @@ async def complete_strategy(
     )
     db.add(outcome)
     s.status = "completed"
+    await db.flush()  # outcome.id gerekli
+
+    # AI etki skoru hesapla ve kaydet
+    impact = StrategyMemory.calculate_impact(s, outcome)
+    outcome.impact_score = impact.impact_score
+    outcome.actual_roas_change_pct = impact.actual_roas_change_pct
+    outcome.predicted_roas_change_pct = impact.predicted_roas_change_pct
+
     await db.commit()
 
     return {
@@ -349,6 +362,13 @@ async def complete_strategy(
         "verdict_reasoning": r.get("verdict_reasoning"),
         "ai_provider": result.provider,
         "tokens_used": result.prompt_tokens + result.completion_tokens,
+        "impact": {
+            "score": impact.impact_score,
+            "verdict": impact.verdict,
+            "actual_roas_change_pct": impact.actual_roas_change_pct,
+            "predicted_roas_change_pct": impact.predicted_roas_change_pct,
+            "confidence_match": impact.confidence_match,
+        },
     }
 
 
@@ -476,6 +496,80 @@ async def get_strategy_projection(strategy_id: int, db: AsyncSession = Depends(g
         "confidence": proj.confidence,
         "timeline_days": timeline_days,
         "days_elapsed": days_elapsed,
+    }
+
+
+@router.get("/impact-analysis")
+async def get_impact_analysis(seller_id: int = 1, db: AsyncSession = Depends(get_db)):
+    """
+    AI isabet analizi: güven skoru vs gerçek sonuç karşılaştırması.
+    Hangi strateji tipinde AI ne kadar isabetli?
+    """
+    q = await db.execute(
+        select(Strategy, StrategyOutcome)
+        .join(StrategyOutcome, StrategyOutcome.strategy_id == Strategy.id)
+        .where(Strategy.seller_id == seller_id, StrategyOutcome.impact_score.isnot(None))
+        .order_by(Strategy.initiated_at.desc())
+    )
+    rows = q.all()
+
+    if not rows:
+        return {
+            "seller_id": seller_id,
+            "total_scored": 0,
+            "overall_impact_score": None,
+            "calibration": {"accuracy_pct": 0, "high_confidence_accuracy_pct": 0},
+            "by_operation_type": {},
+            "per_strategy": [],
+        }
+
+    per_strategy = []
+    by_op: dict[str, list] = {}
+    total_impact = 0.0
+
+    confidence_map = {"low": 0.33, "medium": 0.66, "high": 1.0}
+
+    for s, o in rows:
+        conf_str = (s.ai_launch_analysis or {}).get("confidence", "medium")
+        conf_score = s.ai_confidence_score or confidence_map.get(conf_str, 0.66)
+
+        per_strategy.append({
+            "strategy_id": s.id,
+            "name": s.name,
+            "operation_type": s.operation_type,
+            "outcome": o.outcome,
+            "impact_score": o.impact_score,
+            "ai_confidence": conf_str,
+            "actual_roas_change_pct": o.actual_roas_change_pct,
+            "predicted_roas_change_pct": o.predicted_roas_change_pct,
+            "completed_at": o.completed_at.isoformat() if o.completed_at else None,
+        })
+
+        total_impact += (o.impact_score or 0)
+        op = s.operation_type
+        if op not in by_op:
+            by_op[op] = []
+        by_op[op].append(o.impact_score or 0)
+
+    n = len(rows)
+    by_op_summary = {
+        op: {
+            "count": len(scores),
+            "avg_impact": round(sum(scores) / len(scores), 3),
+        }
+        for op, scores in by_op.items()
+    }
+
+    # Kalibrasyon — StrategyMemory builder'dan al
+    memory = await StrategyMemory.build(seller_id=seller_id, db=db)
+
+    return {
+        "seller_id": seller_id,
+        "total_scored": n,
+        "overall_impact_score": round(total_impact / n, 3) if n else None,
+        "calibration": memory.calibration,
+        "by_operation_type": by_op_summary,
+        "per_strategy": per_strategy,
     }
 
 

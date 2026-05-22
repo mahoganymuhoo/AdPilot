@@ -22,6 +22,9 @@ class Strategy(Base):
     target_metrics = Column(JSON, nullable=False)
     ai_launch_analysis = Column(JSON)
 
+    # AI'ın başlangıçtaki güven skoru (low/medium/high → 0.33/0.66/1.0)
+    ai_confidence_score = Column(Float, nullable=True)
+
     check_interval_days = Column(Integer, default=3)
 
     checkpoints = relationship(
@@ -63,5 +66,13 @@ class StrategyOutcome(Base):
 
     lessons_learned = Column(JSON)
     next_strategy_hints = Column(JSON)
+
+    # Etki skoru: AI güven skoru × gerçek sonuç kalitesi (0-1)
+    # Hesaplama: impact_score = outcome_quality × confidence_match
+    impact_score = Column(Float, nullable=True)
+    # Gerçek ROAS değişimi (başlangıç→sonuç)
+    actual_roas_change_pct = Column(Float, nullable=True)
+    # AI'ın tahmin ettiği değişim
+    predicted_roas_change_pct = Column(Float, nullable=True)
 
     strategy = relationship("Strategy", back_populates="outcome")
