@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart2, TrendingUp, Lightbulb, Settings, Package, Upload } from "lucide-react";
+import { BarChart2, TrendingUp, Lightbulb, Settings, Package, Upload, BookOpen } from "lucide-react";
 import clsx from "clsx";
 
 const navItems = [
@@ -9,6 +9,7 @@ const navItems = [
   { href: "/products", label: "Ürünler", icon: Package },
   { href: "/insights", label: "AI Öneriler", icon: Lightbulb },
   { href: "/upload", label: "Veri Yükle", icon: Upload },
+  { href: "/guide", label: "Nasıl Çalışır?", icon: BookOpen },
   { href: "/settings", label: "Ayarlar", icon: Settings },
 ];
 
@@ -25,7 +26,7 @@ export default function Sidebar() {
         <p className="text-xs text-gray-400 mt-0.5">Reklam Analiz Asistanı</p>
       </div>
 
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 px-3 py-4 space-y-0.5">
         {navItems.map(({ href, label, icon: Icon }) => (
           <Link
             key={href}
@@ -38,12 +39,27 @@ export default function Sidebar() {
             )}
           >
             <Icon size={18} />
-            {label}
+            <span>{label}</span>
+            {href === "/guide" && (
+              <span className="ml-auto text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full font-normal">
+                Yeni
+              </span>
+            )}
           </Link>
         ))}
       </nav>
 
-      <div className="px-4 py-4 border-t border-gray-100">
+      {/* Alt bilgi kutusu */}
+      <div className="mx-3 mb-3 p-3 bg-blue-50 rounded-xl border border-blue-100">
+        <p className="text-xs font-semibold text-blue-700 mb-1">Metrik nedir?</p>
+        <p className="text-xs text-blue-600 leading-relaxed">
+          Her metriğin yanındaki{" "}
+          <span className="inline-block w-3.5 h-3.5 border border-gray-300 rounded-full text-center text-gray-400 text-[9px] leading-3 align-middle">?</span>
+          {" "}ikonuna tıklayarak detaylı açıklama al.
+        </p>
+      </div>
+
+      <div className="px-4 py-3 border-t border-gray-100">
         <p className="text-xs text-gray-400">v0.1.0 · AdPilot</p>
       </div>
     </aside>

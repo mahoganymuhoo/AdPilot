@@ -1,5 +1,8 @@
+"use client";
 import clsx from "clsx";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import InfoModal from "@/components/ui/InfoModal";
+import type { Explainer } from "@/lib/explainers";
 
 interface KpiCardProps {
   title: string;
@@ -8,6 +11,7 @@ interface KpiCardProps {
   trend?: "improving" | "stable" | "declining";
   status?: "good" | "warning" | "danger" | "neutral";
   badge?: string;
+  explainer?: Explainer;
 }
 
 const statusColors = {
@@ -23,18 +27,34 @@ const trendIcons = {
   stable: <Minus size={14} className="text-gray-400" />,
 };
 
-export default function KpiCard({ title, value, subtitle, trend, status = "neutral", badge }: KpiCardProps) {
+const trendLabels = {
+  improving: "Yükseliş",
+  declining: "Düşüş",
+  stable: "Sabit",
+};
+
+export default function KpiCard({
+  title, value, subtitle, trend, status = "neutral", badge, explainer,
+}: KpiCardProps) {
   return (
     <div className={clsx("rounded-xl border p-5 shadow-sm", statusColors[status])}>
       <div className="flex items-start justify-between mb-1">
-        <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{title}</p>
+        <div className="flex items-center gap-1.5">
+          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">{title}</p>
+          {explainer && <InfoModal explainer={explainer} />}
+        </div>
         {badge && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{badge}</span>
         )}
       </div>
       <div className="flex items-end gap-2 mt-1">
         <span className="text-2xl font-bold text-gray-900">{value}</span>
-        {trend && <span className="mb-0.5">{trendIcons[trend]}</span>}
+        {trend && (
+          <span className="mb-0.5 flex items-center gap-1">
+            {trendIcons[trend]}
+            <span className="text-xs text-gray-400">{trendLabels[trend]}</span>
+          </span>
+        )}
       </div>
       {subtitle && <p className="text-xs text-gray-400 mt-1">{subtitle}</p>}
     </div>
